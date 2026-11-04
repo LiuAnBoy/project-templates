@@ -934,6 +934,37 @@ test('guard: a build argument other than API_HOST and PART fails, in a Dockerfil
   assert.deepEqual(checkBuildArgs('    args:\n      PART: web\n    environment:\n      TOKEN: y\n', 'C'), []);
 });
 
+test('guard: every name of an ARG line, quoted compose entries and lower case are read', async () => {
+  const { checkBuildArgs } = await import(new URL('./docker-blocks.mjs', import.meta.url).href);
+  for (const text of [
+    'ARG PART NPM_TOKEN=abc\n',
+    'ARG PART=web DB_PASSWORD=x\n',
+    'ARG PART \\\n    NPM_TOKEN=abc\n',
+    'ARG API_HOST="a b" TOKEN=x\n',
+    'arg token=x\n',
+    '    args:\n      - \'NPM_TOKEN=x\'\n',
+    '    args:\n      - "NPM_TOKEN"\n',
+    '    args:\n      "NPM_TOKEN": x\n',
+    '    args: [PART=web, "NPM_TOKEN=x"]\n',
+    '    args: { "NPM_TOKEN": x }\n',
+  ]) {
+    assert.equal(checkBuildArgs(text, 'D').length, 1, text);
+  }
+  assert.deepEqual(checkBuildArgs('ARG PART API_HOST=x\narg PART\n    args:\n      - \'PART=web\'\n', 'D'), []);
+});
+
+test('guard: a later ! line may not re-include a required .dockerignore pattern', async () => {
+  const { checkDockerignore } = await import(new URL('./docker-blocks.mjs', import.meta.url).href);
+  const base = '**/.env\n**/node_modules\n**/todos\n';
+  for (const negation of ['!**/.env', '!.env', '!**/.env*', '!**/todos', '!node_modules']) {
+    assert.equal(checkDockerignore(`${base}${negation}\n`, 'I').length, 1, negation);
+  }
+  assert.equal(checkDockerignore(`${base}!**\n`, 'I').length, 3);
+  assert.deepEqual(checkDockerignore(`${base}!**/.env.example\n`, 'I'), []);
+  // A pattern listed again after the negation excludes it once more.
+  assert.deepEqual(checkDockerignore(`${base}!**/.env\n**/.env\n`, 'I'), []);
+});
+
 test('guard: a .dockerignore must hold **/.env, **/node_modules and **/todos', async () => {
   const { checkDockerignore } = await import(new URL('./docker-blocks.mjs', import.meta.url).href);
   assert.deepEqual(checkDockerignore('**/.env\n**/node_modules\n**/todos\n.git\n', 'I'), []);
