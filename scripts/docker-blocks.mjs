@@ -658,32 +658,34 @@ export function joinDockerignore(text, fragments) {
 /**
  * Find the build arguments a Dockerfile or compose text declares, other than the allowed.
  *
+ * A Dockerfile is read as Docker does: comment and blank lines are dropped, then
+ * continuation lines are joined, then every name of every `ARG` is read. A
+ * compose `args:` must be a block, a list or a mapping with one entry per line;
+ * a flow form (`args: [...]`, `args: {...}`) fails.
+ *
  * @param {string} text A Dockerfile or a compose file.
  * @param {string} label Name of the file, for messages.
  * @param {readonly string[]} [allowed] Permitted argument names.
- * @returns {string[]} One message per forbidden argument.
+ * @returns {string[]} One message per forbidden argument or flow-form `args:`.
  */
 export function checkBuildArgs(text, label, allowed = ALLOWED_BUILD_ARGS) {
   const names = [];
+  const problems = [];
   const lines = text.split('\n');
-  // A Dockerfile instruction continues over lines that end in a backslash.
-  for (let i = 0; i < lines.length; i += 1) {
-    let logical = lines[i];
-    while (/\\\s*$/.test(logical) && i + 1 < lines.length) {
-      i += 1;
-      if (!lines[i].trim().startsWith('#')) logical = `${logical.replace(/\\\s*$/, ' ')}${lines[i]}`;
-    }
-    const arg = /^\s*ARG\s+(.*)$/i.exec(logical.replace(/\\\s*$/, ''));
-    if (arg) {
-      for (const m of arg[1].matchAll(/([A-Za-z_][A-Za-z0-9_]*)(?:=(?:"[^"]*"|'[^']*'|\S*))?/g)) names.push(m[1]);
-    }
+  const joined = lines
+    .filter((line) => !skippable(line))
+    .join('\n')
+    .replace(/\\[ \t]*\n/g, ' ');
+  for (const line of joined.split('\n')) {
+    const arg = /^\s*ARG\s+(.*)$/i.exec(line);
+    if (!arg) continue;
+    for (const m of arg[1].matchAll(/([A-Za-z_][A-Za-z0-9_]*)(?:=(?:"[^"]*"|'[^']*'|\S*))?/g)) names.push(m[1]);
   }
   lines.forEach((line, i) => {
     const compose = /^(\s*)args:\s*(.*)$/.exec(line);
     if (!compose) return;
-    const inline = compose[2].replace(/(^|\s)#.*$/, '').trim();
-    if (inline !== '') {
-      for (const m of inline.matchAll(/([A-Za-z_][A-Za-z0-9_]*)["']?\s*[:=]/g)) names.push(m[1]);
+    if (compose[2].replace(/(^|\s)#.*$/, '').trim() !== '') {
+      problems.push(`${label}: args: must be a block, one entry per line, not a flow form`);
       return;
     }
     for (let j = i + 1; j < lines.length; j += 1) {
@@ -693,59 +695,33 @@ export function checkBuildArgs(text, label, allowed = ALLOWED_BUILD_ARGS) {
       if (entry) names.push(entry[1]);
     }
   });
-  return names
-    .filter((name) => !allowed.includes(name))
-    .map((name) => `${label}: build argument ${name} is not allowed (only ${allowed.join(', ')})`);
+  return [
+    ...problems,
+    ...names
+      .filter((name) => !allowed.includes(name))
+      .map((name) => `${label}: build argument ${name} is not allowed (only ${allowed.join(', ')})`),
+  ];
 }
 
 /**
- * Convert a `.dockerignore` glob to a regular expression.
- *
- * @param {string} glob Pattern without a leading `!`.
- * @returns {RegExp} Anchored matcher over a root-relative path.
- */
-function ignoreGlob(glob) {
-  const source = glob
-    .replace(/^\//, '')
-    .replace(/[.+^${}()|[\]\\]/g, '\\$&')
-    .replace(/\*\*\//g, '\0')
-    .replace(/\*\*/g, '.*')
-    .replace(/\*/g, '[^/]*')
-    .replace(/\?/g, '[^/]')
-    .replace(/\0/g, '(?:.*/)?');
-  return new RegExp(`^${source}$`);
-}
-
-/**
- * Check that a `.dockerignore` keeps `.env` files, `node_modules` and `todos`
- * out: each required pattern is listed, and no later `!` line re-includes it.
+ * Check that a `.dockerignore` lists `.env` files, `node_modules` and `todos`,
+ * and holds no `!` line except `!.env.example` and `!**\/.env.example`. A file
+ * that needs another negation changes this rule on purpose.
  *
  * @param {string} text The `.dockerignore`.
  * @param {string} label Name of the file, for messages.
- * @returns {string[]} One message per missing or re-included pattern.
+ * @returns {string[]} One message per missing pattern or other negation.
  */
 export function checkDockerignore(text, label) {
   const lines = text.split('\n').map((line) => line.trim());
-  const problems = [];
-  for (const pattern of REQUIRED_IGNORES) {
-    const root = pattern.replace(/^\*\*\//, '');
-    const samples = [root, `a/${root}`];
-    let excluded = false;
-    let undone = '';
-    for (const line of lines) {
-      if (line === pattern) excluded = true;
-      else if (line.startsWith('!') && samples.some((sample) => ignoreGlob(line.slice(1)).test(sample))) {
-        excluded = false;
-        undone = line;
-      }
-    }
-    if (!excluded) {
-      problems.push(
-        undone === '' ? `${label}: .dockerignore lacks ${pattern}` : `${label}: .dockerignore re-includes ${pattern} with ${undone}`,
-      );
-    }
-  }
-  return problems;
+  return [
+    ...REQUIRED_IGNORES.filter((pattern) => !lines.includes(pattern)).map(
+      (pattern) => `${label}: .dockerignore lacks ${pattern}`,
+    ),
+    ...lines
+      .filter((line) => line.startsWith('!') && line !== '!.env.example' && line !== '!**/.env.example')
+      .map((line) => `${label}: .dockerignore negation ${line} is not allowed (only !.env.example)`),
+  ];
 }
 
 /**
