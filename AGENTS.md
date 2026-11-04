@@ -4,8 +4,8 @@ This repository holds standalone starter templates for web frontends (Next.js, V
 
 ## Layout
 
-- `source/`: the layers that templates and overlays are built from. Layers are shared files plus an optional `package.fragment.json` that contributes to the generated `package.json`. Web layers: `web/common`, `web/<next|vite>`, `ui/plain` (the documents of a base without a UI library), and per UI library `ui/<antd|mui|heroui>/common` plus an optional `ui/<lib>/<next|vite>` for files that must differ in one framework. Server layers: `server/common` (all three backends), `server/node` (the two Node backends) and `server/<nest|fastify|fastapi>`. Workspace layers: `workspace` (the root with the `contract` package) and `workspace-no-contract` (the root for a server that has no contract package).
-- `templates/`: generated standalone templates, committed. `next` and `vite` are the web bases; they have no UI library and carry a passthrough `shared/providers/UiProvider.tsx` that an overlay replaces. `nest`, `fastify` and `fastapi` are the backends; `workspace` is the monorepo root.
+- `source/`: the layers that templates and overlays are built from. Layers are shared files plus an optional `package.fragment.json` that contributes to the generated `package.json`. Web layers: `web/common`, `web/<next|vite>`, `ui/plain` (what a base without a UI library needs: its `UiProvider`, `useNotification` and documents), and per UI library `ui/<antd|mui|heroui>/common` plus an optional `ui/<lib>/<next|vite>` for files that must differ in one framework. Server layers: `server/common` (all three backends), `server/node` (the two Node backends) and `server/<nest|fastify|fastapi>`. Workspace layers: `workspace` (the root with the `contract` package) and `workspace-no-contract` (the root for a server that has no contract package).
+- `templates/`: generated standalone templates, committed. `next` and `vite` are the web bases; they have no UI library, and their `shared/providers/UiProvider.tsx` and `shared/hooks/useNotification.ts` are small dependency-free versions that an overlay replaces. `nest`, `fastify` and `fastapi` are the backends; `workspace` is the monorepo root.
 - `overlays/`: generated overlays, committed. The six UI overlays (`next-antd`, `next-mui`, `next-heroui`, `vite-antd`, `vite-mui`, `vite-heroui`) hold only the files of their own layers plus a full `package.json` (the base and the library merged, named after the base) and their `pnpm-lock.yaml`. Each is extracted over a fresh base once, when a project is created: there is no installer and no merge, only overwriting. `workspace-no-contract` is the seventh overlay: the root of a monorepo whose server is FastAPI. It replaces the root manifest, the workspace file, `AGENTS.md` and `docs/README.md` of `workspace` so they state only what exists, and it is applied only by `monorepo.sh`; keeping it under `overlays/` keeps it out of a standalone `workspace` fetch.
 - `scripts/`: the tooling below.
 - `monorepo.sh`: the composer (see "monorepo.sh").
@@ -44,9 +44,10 @@ The usual rule of not running a build does not apply here. Every Node template i
 
 ### Script contract every template must meet
 
-- Node templates define the scripts `lint`, `format:check`, `typecheck`, `test` (single run, never watch mode) and `build`. `check-template.sh` fails when one is missing; the allowlist at the top of the script is empty.
-- Web templates, with or without an overlay, also define `test:e2e`, a Playwright run that starts the app itself.
-- Every UI overlay provides `shared/providers/UiProvider.tsx`, `shared/hooks/useNotification.ts` with exactly the methods `success`, `error`, `warning` and `info` and a test that guards them, `shared/styles/theme.ts`, a Home page rendered through the library's own component, a Playwright spec that asserts a computed style only that library's stylesheet produces, and the documents `docs/rules/ui.md`, `docs/styles.md`, `docs/components/README.md` and `docs/components/useNotification.md`. An overlay overwrites a base file only where the library needs it, so the base stays the shared truth.
+- Node templates define the scripts `lint`, `format:check`, `typecheck`, `test` (single run, never watch mode) and `build`, and carry `.nvmrc`. `check-template.sh` fails when a script is missing; the allowlist at the top of the script is empty.
+- Web templates, with or without an overlay, also define `test:e2e`, a Playwright run that starts the app itself, and ship error and not-found pages through `shared/components/ErrorState.tsx`, `src/test/renderWithProviders.tsx` and `src/test/matchMedia.ts`.
+- Every web project has `shared/hooks/useNotification.ts` with exactly the methods `success`, `error`, `warning` and `info` and a test that guards them. The plain base's version needs no dependency. A UI overlay replaces it with the library's own, at the same paths, so no plain file is left beside it.
+- Every UI overlay provides `shared/providers/UiProvider.tsx`, that hook, `shared/styles/theme.ts`, a Home page rendered through the library's own component, a Playwright spec that asserts a computed style only that library's stylesheet produces, and the documents `docs/rules/ui.md`, `docs/styles.md`, `docs/components/README.md` and `docs/components/useNotification.md`. An overlay overwrites a base file only where the library needs it, so the base stays the shared truth.
 - Node servers also define `start`, which runs the built output, listens on port 8000 and boots with no `.env` and an empty environment.
 - The `workspace` template builds its `contract` package to `dist`, exports it through an `exports` map, and exports `helloResponseSchema` (a zod schema); `live-check.sh` imports it from Node. Its root defines `prepare` (builds `contract`) and `dev` (runs every package's `dev`, in parallel).
 - FastAPI templates define the Makefile targets `lint`, `format-check`, `typecheck` (optional), `test` and `start`, using hyphenated names because a colon in a target name is not valid. They use `uv` and commit `uv.lock`.
@@ -54,7 +55,9 @@ The usual rule of not running a build does not apply here. Every Node template i
 
 ### Live behaviour of servers
 
-`GET /api/v1/hello` answers exactly `{"success":true,"payload":{"data":{"message":"hello world!!"}}}`. An unknown route answers 404 with `success` false and a string `payload.message`. `live-check.sh` refuses to run when port 8000 is taken.
+Every route is under `/api/v1/` except the health route. `GET /api/v1/hello` answers exactly `{"success":true,"payload":{"data":{"message":"hello world!!"}}}`, and `GET /api/health` answers 200 with exactly `{"status":"ok"}`, outside the envelope. An unknown route answers 404 with `success` false and a string `payload.message`. `live-check.sh` refuses to run when port 8000 is taken.
+
+Every server limits requests per client by default: 300 per 60 seconds, from `RATE_LIMIT_MAX` and `RATE_LIMIT_WINDOW_SECONDS`, keyed on the socket address unless `TRUST_PROXY` names the proxies in front. A request over the limit answers 429 in the failure envelope, and the health route is exempt.
 
 ## monorepo.sh
 

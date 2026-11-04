@@ -10,12 +10,21 @@
 | ----------- | ----------------------------------------------------------------- |
 | `next`      | Next.js 16（App Router）、React 19，沒有 UI 元件庫，一個首頁      |
 | `vite`      | Vite 8、React 19、React Router，沒有 UI 元件庫，一個首頁          |
-| `nest`      | NestJS 11（Fastify adapter），一個路由 `GET /api/v1/hello`        |
-| `fastify`   | Fastify 5，同一個路由                                             |
-| `fastapi`   | FastAPI（uv、Python 3.12 以上），同一個路由                       |
+| `nest`      | NestJS 11（Fastify adapter），`GET /api/v1/hello` 與 `GET /api/health` |
+| `fastify`   | Fastify 5，同樣的路由                                             |
+| `fastapi`   | FastAPI（uv、Python 3.12 以上），同樣的路由                       |
 | `workspace` | pnpm workspace 的根：`contract` 套件（前後端共用的 zod schema）與根文件 |
 
-每個範本都附 `AGENTS.md`、`CLAUDE.md`（一行 `@AGENTS.md`）與 `docs/`：規則（`docs/rules/`）與 `AGENTS.md` 以英文撰寫，其餘文件以繁體中文撰寫。Web 範本的首頁顯示 `Welcome`；後端的唯一路由回傳 `{"success":true,"payload":{"data":{"message":"hello world!!"}}}`，沒有資料庫、認證、Redis 等其他東西。
+每個範本都附 `AGENTS.md`、`CLAUDE.md`（一行 `@AGENTS.md`）與 `docs/`：規則（`docs/rules/`）與 `AGENTS.md` 以英文撰寫，其餘文件以繁體中文撰寫。Node 範本另附 `.nvmrc`。
+
+Web 範本的首頁顯示 `Welcome`，並已備好錯誤頁與 404、通知 hook `useNotification`（`success`、`error`、`warning`、`info`）、測試用的 `renderWithProviders` 與 `matchMedia` stub；Next.js 另有設定頁面 metadata 的 `pageMetadata`。
+
+後端的路由都在 `/api/v1/` 底下，只有健康檢查例外：
+
+- `GET /api/v1/hello` 回傳 `{"success":true,"payload":{"data":{"message":"hello world!!"}}}`。
+- `GET /api/health` 回傳 `{"status":"ok"}`，不套回應封套，也不受速率限制，給容器與部署腳本確認服務還活著。
+
+後端預設開啟速率限制：每個來源每 60 秒 300 次，超過回 429。用環境變數 `RATE_LIMIT_MAX`、`RATE_LIMIT_WINDOW_SECONDS` 調整。放在反向代理或 Next.js 後面時要設定 `TRUST_PROXY`，否則所有訪客會共用同一個額度；做法在後端的 `docs/rules/api-and-errors.md`。範本沒有資料庫、認證、Redis 等其他東西。
 
 ## UI overlay
 
@@ -29,8 +38,8 @@ Overlay 在**建立專案時**套用一次，不是安裝到已在開發的專�
 
 套用一個 overlay 會放進專案的東西：
 
-- `shared/providers/UiProvider.tsx`：掛上該元件庫的 provider（取代基底的直通版本）。
-- `shared/hooks/useNotification.ts`：固定四個方法 `success`、`error`、`warning`、`info`，附測試。
+- `shared/providers/UiProvider.tsx`：掛上該元件庫的 provider（取代基底的版本）。
+- `shared/hooks/useNotification.ts`：同樣四個方法，改用該元件庫的通知（antd 用 `App.useApp`、MUI 用 notistack、HeroUI 用 `toast`），呼叫端不用改，附測試。
 - `shared/styles/theme.ts`：整站唯一的樣式來源（顏色、字型、圓角、間距），元件庫的 theme 從這裡取值。
 - 以該元件庫自己的元件渲染的首頁 `Welcome`，以及一個 Playwright 測試，斷言只有該元件庫的樣式表才會產生的計算樣式。
 - Next.js 所需的設定（例如樣式註冊的 layout）、HeroUI 的 PostCSS 設定與 `cn` 工具。

@@ -6,7 +6,7 @@
 
 「使用者」欄列出宣告該版本的範本與 overlay；overlay 的清單已合併其基底範本的依賴，所以基底範本的套件也會列出 overlay。同一套件在不同範本釘在不同版本時，每個版本各佔一列。
 
-共 71 個 Node 套件、8 個 Python 套件；釘在多個版本的套件：Node 0 個、Python 0 個。
+共 73 個 Node 套件、9 個 Python 套件；釘在多個版本的套件：Node 0 個、Python 0 個。
 
 ## Node（npm）
 
@@ -20,6 +20,7 @@
 | `@emotion/styled` | `11.14.1` | next-mui, vite-mui |
 | `@eslint/js` | `10.0.1` | fastify, nest, next, next-antd, next-heroui, next-mui, vite, vite-antd, vite-heroui, vite-mui, workspace |
 | `@fastify/helmet` | `13.2.0` | fastify, nest |
+| `@fastify/rate-limit` | `11.2.2` | fastify |
 | `@heroui/react` | `3.2.7` | next-heroui, vite-heroui |
 | `@heroui/styles` | `3.2.7` | next-heroui, vite-heroui |
 | `@hookform/resolvers` | `7.0.2` | next-heroui, next-mui, vite-heroui, vite-mui |
@@ -33,6 +34,7 @@
 | `@nestjs/core` | `11.2.8` | nest |
 | `@nestjs/platform-fastify` | `11.2.8` | nest |
 | `@nestjs/testing` | `11.2.8` | nest |
+| `@nestjs/throttler` | `6.7.1` | nest |
 | `@playwright/test` | `1.64.1` | next, next-antd, next-heroui, next-mui, vite, vite-antd, vite-heroui, vite-mui |
 | `@react-aria/ssr` | `3.10.1` | next-heroui, vite-heroui |
 | `@react-aria/utils` | `3.34.1` | next-heroui, vite-heroui |
@@ -90,6 +92,7 @@
 | --- | --- | --- |
 | `fastapi` | `0.162.0` | fastapi |
 | `httpx2` | `2.16.0` | fastapi |
+| `limits` | `5.8.0` | fastapi |
 | `loguru` | `0.7.3` | fastapi |
 | `pydantic` | `2.14.2` | fastapi |
 | `pydantic-settings` | `2.16.2` | fastapi |
