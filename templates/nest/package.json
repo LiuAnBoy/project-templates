@@ -8,15 +8,15 @@
     "node": ">=22.12"
   },
   "scripts": {
-    "dev": "nest start --watch",
     "build": "tsc -p tsconfig.build.json",
-    "start": "node dist/main.js",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "dev": "nest start --watch",
+    "start": "node dist/main.js"
   },
   "dependencies": {
     "@fastify/helmet": "13.2.0",

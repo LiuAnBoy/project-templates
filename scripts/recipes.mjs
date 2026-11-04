@@ -12,7 +12,9 @@
  *   ui/plain              the documents of a base project, which has no UI library
  *   ui/<lib>/common       part of a UI overlay shared by both frameworks (antd, mui, heroui)
  *   ui/<lib>/<framework>  part of a UI overlay that only one framework needs (optional)
- *   server/<name>         one layer per backend
+ *   server/common         files shared by all three backends
+ *   server/node           files shared by the Node backends (nest, fastify)
+ *   server/<name>         framework layer of one backend (nest, fastify, fastapi)
  *   workspace             the monorepo root with the contract package
  *
  * A template renders to `templates/<name>`. An overlay renders to
@@ -38,9 +40,9 @@ for (const framework of WEB_FRAMEWORKS) {
   ];
 }
 
-recipes.nest = ['source/server/nest'];
-recipes.fastify = ['source/server/fastify'];
-recipes.fastapi = ['source/server/fastapi'];
+recipes.nest = ['source/server/common', 'source/server/node', 'source/server/nest'];
+recipes.fastify = ['source/server/common', 'source/server/node', 'source/server/fastify'];
+recipes.fastapi = ['source/server/common', 'source/server/fastapi'];
 recipes.workspace = ['source/workspace'];
 
 /**
