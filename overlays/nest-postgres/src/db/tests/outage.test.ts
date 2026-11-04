@@ -48,6 +48,22 @@ describe('postgres outage, with no service running', () => {
   });
 });
 
+describe('postgres failures described for the log, with no service running', () => {
+  it('keeps no tail of a bound value that looks like a stack frame', async () => {
+    const database = createDatabase({ DATABASE_URL: CLOSED_PORT_URL });
+    const forged = 'x\n    at forged (SECRET-TAIL.js:1:1)\nSECRET-AFTER';
+
+    const error = await database.db
+      .execute(sql`select ${forged}::text`)
+      .catch((caught: unknown) => caught);
+    await database.close();
+
+    const logged = JSON.stringify(describeFailure(error));
+    expect(logged).toContain('Failed query');
+    expect(logged).not.toContain('SECRET');
+  });
+});
+
 describe('postgres connection errors that carry no code', () => {
   let server: Server | undefined;
   const sockets = new Set<Socket>();

@@ -21,6 +21,7 @@
  *   data/integration/<fw> integration test config of one backend
  *   data/sql/<node|fastapi>  what every SQL store shares on that platform
  *   data/<store>/common, node, <fw>  one store's layers
+ *   data/redis/alone      the heading and notes of a project whose only store is Redis
  *   data/wiring/<fw>/<database|redis|database-redis>  the seam files, last
  *   data/none             the empty-store block of a base, left out of data overlays
  *
@@ -112,15 +113,17 @@ export const DATA_STORES = ['postgres', 'sqlite'];
 
 /**
  * What a store needs from the layer structure: `sql` stores share the
- * `source/data/sql/<node|fastapi>` layer, and `server` stores need the compose
- * block that runs them (SQLite is a file and has none).
+ * `source/data/sql/<node|fastapi>` layer, `server` stores need the compose
+ * block that runs them (SQLite is a file and has none), and a store that is
+ * not a `database` (Redis) has an `alone` layer that gives a project with no
+ * other store the heading and notes `docs/database.md` and `AGENTS.md` need.
  *
- * @type {Readonly<Record<string, {sql: boolean, server: boolean}>>}
+ * @type {Readonly<Record<string, {sql: boolean, server: boolean, database: boolean}>>}
  */
 export const STORE_TRAITS = {
-  postgres: { sql: true, server: true },
-  sqlite: { sql: true, server: false },
-  redis: { sql: false, server: true },
+  postgres: { sql: true, server: true, database: true },
+  sqlite: { sql: true, server: false, database: true },
+  redis: { sql: false, server: true, database: false },
 };
 
 /**
@@ -130,17 +133,18 @@ export const STORE_TRAITS = {
  * `<framework>-redis`, so the base is the part before the first dash. Layers
  * come in this order: the compose block when any chosen store is a server
  * store; the integration layer of the framework; per store its SQL layer (SQL
- * stores only), `common`, `node` on Node and the framework's own; the wiring
- * layer last. `agentsLayers` is the base's layers without `source/data/none`,
- * then the overlay's own.
+ * stores only), `alone` (a store that is not a database, when it is the only
+ * store), `common`, `node` on Node and the framework's own; the wiring layer
+ * last. `agentsLayers` is the base's layers without `source/data/none`, then
+ * the overlay's own.
  *
  * @param {Record<string, string[]>} baseRecipes The standalone templates.
- * @param {{frameworks: readonly string[], stores: readonly string[], redis: boolean}} options
- *   `redis` false leaves out every entry that includes Redis.
+ * @param {{frameworks: readonly string[], stores: readonly string[]}} options
+ *   The frameworks, and the database stores each pairs with Redis.
  * @returns {Record<string, {base: string, layers: string[], agentsLayers: string[]}>} Overlay entries.
  * @throws {Error} On a framework with no base recipe or a store with no traits.
  */
-export function buildDataOverlays(baseRecipes, { frameworks, stores, redis }) {
+export function buildDataOverlays(baseRecipes, { frameworks, stores }) {
   const entries = {};
   for (const framework of frameworks) {
     const baseLayers = baseRecipes[framework];
@@ -148,11 +152,8 @@ export function buildDataOverlays(baseRecipes, { frameworks, stores, redis }) {
     const node = framework !== 'fastapi';
     /** @type {string[][]} Each combination: the database store, if any, then redis. */
     const combos = [];
-    for (const store of stores) {
-      combos.push([store]);
-      if (redis) combos.push([store, 'redis']);
-    }
-    if (redis) combos.push(['redis']);
+    for (const store of stores) combos.push([store], [store, 'redis']);
+    combos.push(['redis']);
     for (const combo of combos) {
       for (const store of combo) {
         if (!STORE_TRAITS[store]) throw new Error(`data overlays: no STORE_TRAITS entry for "${store}"`);
@@ -162,11 +163,12 @@ export function buildDataOverlays(baseRecipes, { frameworks, stores, redis }) {
       layers.push(`source/data/integration/${framework}`);
       for (const store of combo) {
         if (STORE_TRAITS[store].sql) layers.push(`source/data/sql/${node ? 'node' : 'fastapi'}`);
+        if (!STORE_TRAITS[store].database && combo.length === 1) layers.push(`source/data/${store}/alone`);
         layers.push(`source/data/${store}/common`);
         if (node) layers.push(`source/data/${store}/node`);
         layers.push(`source/data/${store}/${framework}`);
       }
-      const hasDatabase = combo[0] !== 'redis';
+      const hasDatabase = STORE_TRAITS[combo[0]].database;
       const wiring = hasDatabase ? (combo.length > 1 ? 'database-redis' : 'database') : 'redis';
       layers.push(`source/data/wiring/${framework}/${wiring}`);
       entries[`${framework}-${combo.join('-')}`] = {
@@ -184,17 +186,16 @@ export function buildDataOverlays(baseRecipes, { frameworks, stores, redis }) {
  * combination the others only repeat: `<framework>-<store>-redis` for a server
  * store, `<framework>-<store>` for a file store, and `<framework>-redis`.
  *
- * @param {{frameworks: readonly string[], stores: readonly string[], redis: boolean}} options As buildDataOverlays.
+ * @param {{frameworks: readonly string[], stores: readonly string[]}} options As buildDataOverlays.
  * @returns {string[]} Overlay names.
  */
-export function buildDataLive({ frameworks, stores, redis }) {
+export function buildDataLive({ frameworks, stores }) {
   const live = [];
   for (const framework of frameworks) {
     for (const store of stores) {
-      const withRedis = redis && STORE_TRAITS[store]?.server;
-      live.push(`${framework}-${store}${withRedis ? '-redis' : ''}`);
+      live.push(`${framework}-${store}${STORE_TRAITS[store]?.server ? '-redis' : ''}`);
     }
-    if (redis) live.push(`${framework}-redis`);
+    live.push(`${framework}-redis`);
   }
   return live;
 }
@@ -218,24 +219,16 @@ export function uncoveredLayers(dataEntries, live) {
   return [...problems, ...[...missing].sort()];
 }
 
-/**
- * Whether the Redis entries are generated. The generator takes it as an
- * argument so a fixture can render the file-store overlays alone.
- */
-const DATA_REDIS = false;
-
 /** @type {Record<string, {base: string, layers: string[], agentsLayers: string[]}>} Data overlays. */
 export const dataOverlays = buildDataOverlays(recipes, {
   frameworks: DATA_FRAMEWORKS,
   stores: DATA_STORES,
-  redis: DATA_REDIS,
 });
 
 /** @type {string[]} The data overlays that run against real services. */
 export const DATA_LIVE = buildDataLive({
   frameworks: DATA_FRAMEWORKS,
   stores: DATA_STORES,
-  redis: DATA_REDIS,
 });
 
 Object.assign(overlays, dataOverlays);

@@ -1,0 +1,5 @@
+{
+  "dependencies": {
+    "@nest-lab/throttler-storage-redis": "1.2.0"
+  }
+}

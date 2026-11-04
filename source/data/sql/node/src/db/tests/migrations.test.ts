@@ -159,6 +159,37 @@ describe('the migration runner', () => {
     expect(calls).toEqual(['close']);
   });
 
+  it('runs the store verification after a migration and when nothing is pending', async () => {
+    for (const applied of [[1000], [1000, 2000, 3000]]) {
+      const { open, calls } = fakeStore(applied);
+      const store = await open();
+      store.verify = () => {
+        calls.push('verify');
+        return Promise.resolve();
+      };
+
+      await runMigrate(() => Promise.resolve(store), {
+        folder,
+        out: capture().out,
+      });
+
+      expect(calls).toContain('verify');
+    }
+  });
+
+  it('fails when the store verification fails, even though nothing is pending', async () => {
+    const { open, calls } = fakeStore([1000, 2000, 3000]);
+    const store = await open();
+    store.verify = () => Promise.reject(new Error('data is inconsistent'));
+    const { out, chunks } = capture();
+
+    await expect(
+      runMigrate(() => Promise.resolve(store), { folder, out }),
+    ).rejects.toThrow('data is inconsistent');
+    expect(chunks.join('')).toContain('No pending migrations.');
+    expect(calls).toEqual(['close']);
+  });
+
   it('fails and names an entry the migrator would skip silently', async () => {
     const { open, calls } = fakeStore([1000, 3000]);
     const { out, chunks } = capture();
@@ -232,6 +263,29 @@ describe('describeMigrateFailure', () => {
       expect(text).not.toMatch(/10\.1\.2\.3|secret-user/);
     }
     expect(describeMigrateFailure(aggregate)).toContain('ECONNREFUSED');
+  });
+
+  it('treats a missing database and a TLS failure as a connection failure, never printing their names', () => {
+    const missing = Object.assign(
+      new Error('database "secret-db" does not exist'),
+      { code: '3D000' },
+    );
+    const tls = Object.assign(
+      new Error(
+        "Hostname/IP does not match certificate's altnames: Host: secret-host.internal",
+      ),
+      { code: 'ERR_TLS_CERT_ALTNAME_INVALID' },
+    );
+
+    const missingText = describeMigrateFailure(missing);
+    const tlsText = describeMigrateFailure(new Error('query', { cause: tls }));
+
+    expect(missingText).toMatch(/Cannot reach or open the database \(3D000\)/);
+    expect(missingText).not.toContain('secret-db');
+    expect(tlsText).toMatch(
+      /Cannot reach or open the database \(ERR_TLS_CERT_ALTNAME_INVALID\)/,
+    );
+    expect(tlsText).not.toContain('secret-host');
   });
 
   it('prints the statement and every cause of a SQL failure, and never an empty line', () => {

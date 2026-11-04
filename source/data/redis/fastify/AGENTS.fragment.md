@@ -1,0 +1,3 @@
+## Redis on Fastify
+
+Take the client from the infra seam: `createInfra(config)` in `src/infra/infra.ts` returns `redis` (the `ioredis` client of `src/redis/client.ts`), and `main.ts` passes it to the factories it wires. `createInfra` creates the client once and its `close` ends it; never create another. The rate limit's counts live in Redis through `src/redis/rate-limit-store.ts`, which `createInfra` returns as `rateLimitStore`; it answers 503 when Redis does not answer within a second and never lets a request through uncounted. `pnpm test:integration` runs the Redis tests against the compose service (start it first, and copy `.env.example` to `.env`).

@@ -1,5 +1,7 @@
+import { sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
+import { describeFailure } from '../../common/errors/failure.js';
 import { createDatabase } from '../database.js';
 import {
   createProbe,
@@ -54,6 +56,17 @@ describe('postgres database', () => {
     });
 
     expect(await probe.exists(database.db, 'inside')).toBe(true);
+  });
+
+  it('logs the code and not the quoted value of a data exception under a failed statement', async () => {
+    const error = await database.db
+      .execute(sql`select ${'SECRET-TOKEN-123'}::int`)
+      .catch((caught: unknown) => caught);
+
+    const failure = describeFailure(error);
+
+    expect(failure.chain.map((link) => link.code)).toContain('22P02');
+    expect(JSON.stringify(failure)).not.toContain('SECRET-TOKEN-123');
   });
 
   it('fails the probe on a closed pool', async () => {

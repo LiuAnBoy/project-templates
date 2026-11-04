@@ -46,7 +46,8 @@ export async function openStore({ forMigrate }) {
     // transaction, where the `PRAGMA foreign_keys=OFF` of a generated table
     // rebuild is a no-op, so with enforcement on, `DROP TABLE` of a parent
     // silently deletes the child rows that `ON DELETE CASCADE` points at.
-    // `foreign_key_check` after the migrator takes the place of the enforcement.
+    // `verify` takes the place of the enforcement: `foreign_key_check` runs after
+    // every migration and also when nothing is pending.
     connection.pragma('foreign_keys = OFF');
     connection.pragma('journal_mode = WAL');
   }
@@ -66,11 +67,13 @@ export async function openStore({ forMigrate }) {
     },
     async migrate(folder) {
       migrate(drizzle({ client: connection }), { migrationsFolder: folder });
+    },
+    async verify() {
       const violations = connection.pragma('foreign_key_check');
       if (violations.length > 0) {
         const tables = [...new Set(violations.map((row) => row.table))];
         throw new Error(
-          `The migration left rows that break a foreign key (${violations.length} in ${tables.join(', ')}). It is already applied: fix the data or add a migration.`,
+          `The database holds rows that break a foreign key (${violations.length} in ${tables.join(', ')}). A migration that is already applied cannot be undone: fix the data, or add a migration that does.`,
         );
       }
     },

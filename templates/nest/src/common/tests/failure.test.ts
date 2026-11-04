@@ -133,6 +133,75 @@ describe('describeFailure', () => {
     expect(failure.chain[1]?.code).toBe('ECONNREFUSED');
   });
 
+  it('cuts the stack after the message, so a bound value that looks like a frame keeps no tail', () => {
+    const message =
+      'Failed query: select $1\nparams: x\n    at forged (SECRET-TAIL.js:1:1)\nSECRET-AFTER';
+    const error = Object.assign(new Error(message), {
+      query: 'select $1',
+      params: ['x'],
+    });
+
+    const link = describeFailure(error).chain[0];
+
+    expect(link?.stack).toContain('failure.test');
+    expect(JSON.stringify(link)).not.toContain('SECRET');
+  });
+
+  it('keeps none of the text of a statement failure whose message changed after the stack was captured', () => {
+    const error = Object.assign(new Error('before'), {
+      query: 'select $1',
+      params: ['x'],
+    });
+    error.message = 'params: SECRET-VALUE\n    at forged (SECRET.js:1:1)';
+
+    const link = describeFailure(error).chain[0];
+
+    // Depending on when the runtime formats the stack its header holds the old
+    // or the new message; either way only frames may remain, and none of the text.
+    expect(link?.stack === '' || link?.stack?.startsWith('    at ')).toBe(true);
+    expect(JSON.stringify(link)).not.toContain('SECRET');
+  });
+
+  it('logs the code and drops the message of a data exception under a failed statement', () => {
+    const cause = Object.assign(
+      new Error('invalid input syntax for type integer: "SECRET-TOKEN-123"'),
+      { code: '22P02' },
+    );
+    const error = Object.assign(new Error('Failed query: select $1'), {
+      query: 'select $1',
+      params: ['SECRET-TOKEN-123'],
+      cause,
+    });
+
+    const failure = describeFailure(error);
+
+    expect(failure.chain[1]?.code).toBe('22P02');
+    expect(failure.chain[1]?.message).toBe('');
+    expect(JSON.stringify(failure)).not.toContain('SECRET-TOKEN-123');
+  });
+
+  it('keeps the message of a data exception that has no failed statement above it, and of other codes under one', () => {
+    const quoted = Object.assign(new Error('value out of range'), {
+      code: '22003',
+    });
+    const constraint = Object.assign(
+      new Error('duplicate key value violates unique constraint "users_pkey"'),
+      { code: '23505' },
+    );
+    const statement = Object.assign(new Error('Failed query: select $1'), {
+      query: 'select $1',
+      params: [1],
+      cause: constraint,
+    });
+
+    expect(describeFailure(quoted).chain[0]?.message).toBe(
+      'value out of range',
+    );
+    expect(describeFailure(statement).chain[1]?.message).toBe(
+      'duplicate key value violates unique constraint "users_pkey"',
+    );
+  });
+
   it('keeps the message of an error that has a query but no params', () => {
     const error = Object.assign(new Error('plain message'), { query: 'x' });
 

@@ -110,6 +110,36 @@ describe('db:migrate on SQLite', () => {
     expect(childRows()).toBe(1);
   });
 
+  it('keeps failing on a rerun after a violation, even though nothing is pending', async () => {
+    await seed();
+    const orphan =
+      "INSERT INTO `child` (`id`, `parent_id`) VALUES ('x', 'missing');";
+    const folderTwo = migrations('two', [CREATE, orphan]);
+    await runMigrate(openStore, { folder: folderTwo, out: quiet }).catch(
+      () => undefined,
+    );
+
+    const chunks: string[] = [];
+    await expect(
+      runMigrate(openStore, {
+        folder: folderTwo,
+        out: { write: (text: string) => chunks.push(text) },
+      }),
+    ).rejects.toThrow(/break a foreign key \(1 in child\)/);
+    expect(chunks.join('')).toContain('No pending migrations.');
+  });
+
+  it('passes on a rerun when the database is consistent and nothing is pending', async () => {
+    await seed();
+
+    await expect(
+      runMigrate(openStore, {
+        folder: migrations('one', [CREATE]),
+        out: quiet,
+      }),
+    ).resolves.toBeUndefined();
+  });
+
   it('fails when a migration leaves a row that breaks a foreign key', async () => {
     await seed();
     const orphan =

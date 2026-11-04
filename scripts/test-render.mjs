@@ -603,7 +603,6 @@ test('data overlay entries name, order and filter their layers', async () => {
   const all = buildDataOverlays(bases, {
     frameworks: ['nest', 'fastapi'],
     stores: ['postgres', 'sqlite'],
-    redis: true,
   });
   assert.deepEqual(Object.keys(all), [
     'nest-postgres',
@@ -636,7 +635,17 @@ test('data overlay entries name, order and filter their layers', async () => {
     'source/data/sqlite/fastapi',
     'source/data/wiring/fastapi/database',
   ]);
-  assert.deepEqual(all['nest-redis'].layers.slice(-1), ['source/data/wiring/nest/redis']);
+  assert.deepEqual(all['nest-redis'].layers, [
+    'source/data/compose',
+    'source/data/integration/nest',
+    'source/data/redis/alone',
+    'source/data/redis/common',
+    'source/data/redis/node',
+    'source/data/redis/nest',
+    'source/data/wiring/nest/redis',
+  ]);
+  assert.equal(all['nest-postgres-redis'].layers.includes('source/data/redis/alone'), false);
+  assert.equal(all['nest-sqlite-redis'].layers.includes('source/data/redis/alone'), false);
   assert.equal(all['nest-redis'].layers.includes('source/data/sql/node'), false);
   assert.equal(all['nest-sqlite'].layers.includes('source/data/compose'), false);
   assert.equal(all['nest-sqlite-redis'].layers[0], 'source/data/compose');
@@ -650,23 +659,19 @@ test('data overlay entries name, order and filter their layers', async () => {
     assert.deepEqual(entry.agentsLayers.slice(-entry.layers.length), entry.layers);
     assert.equal(entry.base, entry.layers.at(-1).split('/')[3] ?? entry.base);
   }
-  const noRedis = buildDataOverlays(bases, { frameworks: ['nest'], stores: ['postgres', 'sqlite'], redis: false });
-  assert.deepEqual(Object.keys(noRedis), ['nest-postgres', 'nest-sqlite']);
-  assert.deepEqual(buildDataOverlays(bases, { frameworks: [], stores: ['postgres'], redis: true }), {});
-  assert.deepEqual(
-    buildDataLive({ frameworks: ['nest'], stores: ['postgres', 'sqlite'], redis: true }),
-    ['nest-postgres-redis', 'nest-sqlite', 'nest-redis'],
-  );
-  assert.deepEqual(buildDataLive({ frameworks: ['nest'], stores: ['postgres', 'sqlite'], redis: false }), [
-    'nest-postgres',
+  assert.deepEqual(Object.keys(buildDataOverlays(bases, { frameworks: ['nest'], stores: [] })), ['nest-redis']);
+  assert.deepEqual(buildDataOverlays(bases, { frameworks: [], stores: ['postgres'] }), {});
+  assert.deepEqual(buildDataLive({ frameworks: ['nest'], stores: ['postgres', 'sqlite'] }), [
+    'nest-postgres-redis',
     'nest-sqlite',
+    'nest-redis',
   ]);
   assert.throws(
-    () => buildDataOverlays(bases, { frameworks: ['nest'], stores: ['nope'], redis: false }),
+    () => buildDataOverlays(bases, { frameworks: ['nest'], stores: ['nope'] }),
     /no STORE_TRAITS entry for "nope"/,
   );
   assert.throws(
-    () => buildDataOverlays(bases, { frameworks: ['zzz'], stores: [], redis: false }),
+    () => buildDataOverlays(bases, { frameworks: ['zzz'], stores: [] }),
     /no base recipe for "zzz"/,
   );
 });
@@ -674,7 +679,7 @@ test('data overlay entries name, order and filter their layers', async () => {
 test('every layer of every data overlay runs in a live overlay, or the rule fails', async () => {
   const { buildDataOverlays, buildDataLive, uncoveredLayers, dataOverlays, DATA_LIVE } = await loadRecipes();
   const bases = { nest: ['source/server/common', 'source/server/node', 'source/server/nest'] };
-  const options = { frameworks: ['nest'], stores: ['postgres', 'sqlite'], redis: true };
+  const options = { frameworks: ['nest'], stores: ['postgres', 'sqlite'] };
   const entries = buildDataOverlays(bases, options);
   assert.deepEqual(uncoveredLayers(entries, buildDataLive(options)), []);
   // A live set that leaves a layer out is reported by name.

@@ -2,6 +2,7 @@ export type Store = {
   table: string;
   listApplied: () => Promise<number[] | null>;
   migrate: (folder: string) => Promise<void>;
+  verify?: () => Promise<void>;
   close: () => Promise<void>;
 };
 

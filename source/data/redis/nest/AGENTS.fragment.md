@@ -1,0 +1,3 @@
+## Redis on NestJS
+
+Take the client from the global `InfraModule`: inject `REDIS` (the `ioredis` client of `src/redis/client.ts`) into a provider that needs it (`src/infra/tokens.ts`). `InfraModule` creates the client once and closes it on shutdown; never create another. The rate limit's counts live in Redis through `src/redis/bounded-throttler.storage.ts`, which `InfraModule` hands to `ThrottlerModule`; it answers 503 when Redis does not answer within a second and never lets a request through uncounted. `pnpm test:integration` runs the Redis tests against the compose service (start it first, and copy `.env.example` to `.env`).

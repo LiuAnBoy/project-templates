@@ -1,0 +1,9 @@
+# pnpm settings for this project.
+# One fastify copy keeps plugin types consistent with the Nest adapter's own.
+overrides:
+  fastify: 5.12.8
+onlyBuiltDependencies:
+  - '@nestjs/core'
+  - '@swc/core'
+  - better-sqlite3
+  - esbuild

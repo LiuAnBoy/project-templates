@@ -17,6 +17,10 @@ import {
  * @property {() => Promise<number[] | null>} listApplied The `created_at` stamps of the record,
  *   or null when the table (or the SQLite file) does not exist. Never writes.
  * @property {(folder: string) => Promise<void>} migrate Runs Drizzle's migrator over the folder.
+ * @property {() => Promise<void>} [verify] Checks what the store can check about the data
+ *   (SQLite's foreign keys), and throws when it finds a problem. `db:migrate` runs it after
+ *   every migration and also when nothing is pending, so a violation a migration left
+ *   behind keeps failing until it is fixed. Never writes.
  * @property {() => Promise<void>} close Releases the connection.
  */
 
@@ -63,7 +67,8 @@ function failSkipped(out, skipped) {
  *
  * Prints the counts, the names before applying and the record after, warns when
  * the database holds a migration this checkout lacks, and fails when a journal
- * entry would be skipped silently or the migrator leaves work behind.
+ * entry would be skipped silently, the migrator leaves work behind or the
+ * store's own verification finds a problem (also when nothing was pending).
  *
  * @param {(options: {forMigrate: boolean}) => Promise<Store>} openStore Opens the store.
  * @param {RunOptions} [options] Folder and output.
@@ -90,10 +95,12 @@ export async function runMigrate(openStore, options = {}) {
     }
     if (pending.length === 0) {
       out.write('No pending migrations.\n');
+      await store.verify?.();
       return;
     }
     report(out, `Applying ${pending.length} pending migration(s):`, pending);
     await store.migrate(folder);
+    await store.verify?.();
     const left = findPending(journal, await store.listApplied());
     if (left.length > 0) {
       report(out, 'Migrations remained unapplied:', left);
@@ -180,7 +187,10 @@ function flatten(error, depth = 0) {
 
 /**
  * Whether a link says the database could not be reached or opened, or that a
- * path could not be used. Their messages carry the host, the user or the path.
+ * path could not be used. Their messages carry the host, the user, the path or
+ * the name of the database: a login refusal (class 28), a missing database
+ * (class 3D) and a TLS failure (`ERR_TLS_*`, whose message can name the host)
+ * are all of this kind.
  *
  * @param {{code?: unknown, message?: unknown, syscall?: unknown}} link One error in the chain.
  * @returns {boolean} True when the link names a connection or file-system failure.
@@ -191,6 +201,8 @@ function isConnectionLink(link) {
     CONNECTION_CODES.has(code) ||
     code.startsWith('08') ||
     code.startsWith('28') ||
+    code.startsWith('3D') ||
+    code.startsWith('ERR_TLS_') ||
     code.startsWith('57P0') ||
     typeof link.syscall === 'string' ||
     (typeof link.message === 'string' && CONNECTION_MESSAGES.test(link.message))

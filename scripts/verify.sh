@@ -286,6 +286,15 @@ check_refusals() {
     "p next plain nest --dashboard nope plain" \
     "p next plain nest --dashboard next nope" \
     "p next plain nest --other next plain" \
+    "p next plain nest --data" \
+    "p next plain nest --data nope" \
+    "p next plain nest --data redis,postgres" \
+    "p next plain nest --data postgres,sqlite" \
+    "p next plain nest --data postgres,redis,redis" \
+    "p next plain nest --data redis --data redis" \
+    "p next plain nest --data redis --dashboard next" \
+    "p next plain nest --dashboard next plain --data nope" \
+    "p next plain nest --data sqlite --dashboard nope plain" \
     "p next plain" \
     "../escape next plain nest" \
     "-bad next plain nest" \

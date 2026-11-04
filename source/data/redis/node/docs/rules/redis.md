@@ -4,12 +4,15 @@ Redis holds disposable or coordination state: caches, locks, pub/sub messages an
 
 ## Connection and keys
 
-- One client factory per process, from a URL in the env schema (`REDIS_URL`); no host or credential in code. Reuse the client; do not open one per request.
-- Key shape: `<service>:<entity>:<id>[:<facet>]`, lower case, colon separated, for example `shop:product:42:detail`. The service prefix keeps services sharing one Redis apart.
+- `src/redis/client.ts` is the one file that names the Redis client. `createRedisClient(config)` returns the client, a probe and a close from a URL in the env schema (`REDIS_URL`); the `src/infra/` seam calls it once. No host or credential in code. Reuse the client; never open one per request.
+- The client has no offline queue and a capped reconnect delay. While it holds no connection every command fails at once with an error the shared classifier answers as 503, instead of waiting in memory and running late. Its `error` events are handled and logged as one line with the code and never the URL, so a lost connection neither ends the process nor leaks the credential.
+- Start-up checks the connection with a real `PING`: if Redis cannot be reached the server does not start and says `redis`, never a value. After start-up the health route answers 503 while Redis is lost and 200 again once the client has reconnected.
+- Key shape: `<service>:<entity>:<id>[:<facet>]`, lower case, colon separated, for example `shop:product:42:detail`. The service prefix keeps services sharing one Redis apart. The template writes its rate-limit counters under `REDIS_KEY_PREFIX` of `src/redis/client.ts` (`app`); change it to the project's name once, and use it for your own keys too.
 - Every key written by application code gets a TTL, except queue keys that the queue library manages. Reason: a key without a TTL becomes permanent clutter.
 - Never run `FLUSHALL` or `FLUSHDB`, in code, scripts or by hand against a shared instance. To clear, delete keys by exact name or by `SCAN` with the service prefix, in batches.
 - Never use `KEYS` in application code; use `SCAN`.
 - An unreachable Redis answers 503, not 500 (see `api-and-errors.md`). A cache miss caused by an outage falls through to the database where that is safe.
+- A call to Redis on the request path goes under `bounded()`: a connection that is up but silent would otherwise hold the request open. The rate limiter already does, and it fails closed: when Redis does not answer, the request is answered 503 and is not let through uncounted.
 
 ## Cache-aside
 

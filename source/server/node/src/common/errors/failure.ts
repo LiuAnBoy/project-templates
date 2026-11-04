@@ -121,21 +121,53 @@ function nameOf(value: object): string {
 /**
  * Keeps only the call frames of a stack, dropping the message lines before them.
  *
+ * The cut is made after the error's own message, not at the first line that
+ * looks like a frame: a message holding bound values can hold such a line, and
+ * cutting at it would keep the rest of the value. A stack whose header does not
+ * contain the message (the message was changed after the stack was captured)
+ * keeps no frames, because where its header ends is not known.
+ *
  * @param stack - A stack string whose first lines are the error's message.
+ * @param message - The message the error had when it was thrown.
  * @returns The frames, or an empty string when there are none.
  */
-function framesOf(stack: string): string {
-  const start = stack.search(/\n\s+at /);
-  return start === -1 ? '' : stack.slice(start + 1);
+function framesOf(stack: string, message: string): string {
+  const at = stack.indexOf(message);
+  if (at === -1) return '';
+  const rest = stack.slice(at + message.length);
+  const start = rest.search(/\n\s+at /);
+  return start === -1 ? '' : rest.slice(start + 1);
 }
+
+/**
+ * Whether an error is a failed statement of a query builder: it carries the
+ * statement and its bound values.
+ *
+ * @param error - One error in the chain.
+ * @returns True when it has a non-empty `query` string and a `params` array.
+ */
+function isStatementFailure(error: unknown): boolean {
+  return (
+    stringField(error, 'query') !== undefined &&
+    Array.isArray(read(error as object, 'params'))
+  );
+}
+
+/** SQLSTATE class 22, data exceptions: the driver's message quotes the offending value. */
+const DATA_EXCEPTION = /^22/;
 
 /**
  * Describes one link of a chain.
  *
  * @param link - One error in the chain.
+ * @param underStatement - Whether a failed statement sits above this link, whose
+ *   bound values a data-exception message of the driver would quote.
  * @returns What is worth printing about it.
  */
-function describe({ error, sibling }: Flattened): FailureLink {
+function describe(
+  { error, sibling }: Flattened,
+  underStatement: boolean,
+): FailureLink {
   if (typeof error !== 'object' || error === null) {
     return {
       name: typeof error,
@@ -143,21 +175,29 @@ function describe({ error, sibling }: Flattened): FailureLink {
       ...(sibling ? { sibling } : {}),
     };
   }
-  const link: FailureLink = {
-    name: nameOf(error),
-    message: stringField(error, 'message') ?? '',
-  };
+  const message = stringField(error, 'message') ?? '';
+  const link: FailureLink = { name: nameOf(error), message };
   const code = stringField(error, 'code') ?? stringField(error, 'sqlState');
   if (code !== undefined) link.code = code;
   const stack = stringField(error, 'stack');
   if (stack !== undefined) link.stack = stack;
   const query = stringField(error, 'query');
-  if (query !== undefined && Array.isArray(read(error, 'params'))) {
+  if (query !== undefined && isStatementFailure(error)) {
     // A failed statement of a query builder: its message and stack carry the
     // bound values, which can be tokens or personal data. The statement and the
     // cause underneath say what went wrong.
     link.message = `Failed query: ${query}`;
-    if (stack !== undefined) link.stack = framesOf(stack);
+    if (stack !== undefined) link.stack = framesOf(stack, message);
+  } else if (
+    underStatement &&
+    code !== undefined &&
+    DATA_EXCEPTION.test(code)
+  ) {
+    // The driver's cause of a statement that sent a value of the wrong shape
+    // (SQLSTATE 22P02 and its class) quotes that value in its message. The code
+    // says what went wrong.
+    link.message = '';
+    if (stack !== undefined) link.stack = framesOf(stack, message);
   }
   if (sibling) link.sibling = true;
   return link;
@@ -170,8 +210,14 @@ function describe({ error, sibling }: Flattened): FailureLink {
  * @returns The chain, outermost first.
  */
 export function describeFailure(error: unknown): Failure {
-  const chain = flattenCauses(error).map(describe);
+  let underStatement = false;
+  const chain = flattenCauses(error).map((found) => {
+    const link = describe(found, underStatement);
+    if (isStatementFailure(found.error)) underStatement = true;
+    return link;
+  });
   return {
-    chain: chain.length > 0 ? chain : [describe({ error, sibling: false })],
+    chain:
+      chain.length > 0 ? chain : [describe({ error, sibling: false }, false)],
   };
 }

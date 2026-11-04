@@ -3,7 +3,13 @@
 #
 #   curl -fsSL https://raw.githubusercontent.com/LiuAnBoy/project-templates/master/monorepo.sh \
 #     | bash -s -- <project> <next|vite> <plain|antd|mui|heroui> <nest|fastify|fastapi> \
-#       [--dashboard <next|vite> <plain|antd|mui|heroui>]
+#       [--dashboard <next|vite> <plain|antd|mui|heroui>] [--data <store>[,redis]]
+#
+# --data picks the data store of the server once, when the project is created:
+# postgres, sqlite, redis, postgres,redis or sqlite,redis (exactly these). It
+# extracts the data overlay of the server over server/, so the server brings
+# its store's code, rules, settings, compose file and lockfile. --dashboard and
+# --data come in any order after the four positional words.
 #
 # The project holds web/ (the chosen web template, with the UI overlay applied
 # unless the choice is plain), server/, an optional dashboard/ built the same
@@ -31,6 +37,7 @@ pt_usage() {
   cat >&2 <<'EOF'
 usage: monorepo.sh <project> <next|vite> <plain|antd|mui|heroui> <nest|fastify|fastapi>
                    [--dashboard <next|vite> <plain|antd|mui|heroui>]
+                   [--data <postgres|sqlite|redis|postgres,redis|sqlite,redis>]
 EOF
 }
 
@@ -111,8 +118,8 @@ pt_web_part() {
   pt_edit_part "$2/$3" "$3" "$6" "$7"
 }
 
-# pt_compose <archive> <root> <web-fw> <web-ui> <server> <dash-fw> <dash-ui>:
-# build the project tree in root. dash-fw is empty without a dashboard.
+# pt_compose <archive> <root> <web-fw> <web-ui> <server> <dash-fw> <dash-ui> <data>:
+# build the project tree in root. dash-fw is empty without a dashboard, data without a store.
 pt_compose() {
   archive="$1"
   root="$2"
@@ -133,6 +140,10 @@ pt_compose() {
 
   mkdir -p "$root/server" || return 1
   pt_extract "$archive" 3 "$root/server" "templates/$5" || return 1
+  if [ -n "$8" ]; then
+    # The overlay of a store pair is named after both: postgres,redis -> nest-postgres-redis.
+    pt_extract "$archive" 3 "$root/server" "overlays/$5-${8//,/-}" || return 1
+  fi
   if [ "$5" != fastapi ]; then
     rm -f "$root/server/pnpm-lock.yaml" "$root/server/pnpm-workspace.yaml"
     pt_edit_part "$root/server" server "$contract" 0 || return 1
@@ -143,7 +154,35 @@ pt_compose() {
   done
 }
 
-# pt_next_steps <project> <server> <dashboard-fw> <web-fw>: print what to do next.
+# pt_data_steps <server> <data> <project>: print the steps a chosen store adds, nothing without one.
+# The compose file sits in server/, so compose would name its project `server` and
+# two projects on one machine would share containers and volumes: the project's own
+# name (lower case, dots as underscores, which compose accepts) is given instead.
+pt_data_steps() {
+  [ -n "$2" ] || return 0
+  echo "  cp server/.env.example server/.env   # the server refuses to start without its settings"
+  case "$2" in
+    sqlite) ;;
+    *)
+      compose_name="$(printf '%s' "$3" | tr 'A-Z.' 'a-z_')"
+      echo "  docker compose -p $compose_name -f server/docker-compose.dev.yml up -d --wait   # starts the store(s); stop them with the same -p"
+      ;;
+  esac
+  case "$2" in
+    redis) ;;
+    *)
+      if [ "$1" = fastapi ]; then
+        echo "  make -C server db-migrate            # applies the migrations"
+      else
+        echo "  pnpm --filter server db:migrate      # applies the migrations"
+      fi
+      ;;
+  esac
+}
+
+# pt_next_steps <project> <server> <dashboard-fw> <web-fw> <data>: print what to do next.
+# A server with a store refuses to start until its .env exists, its services run
+# and its database is migrated, so those steps come before the dev command.
 pt_next_steps() {
   echo
   echo "Created $1."
@@ -153,10 +192,12 @@ pt_next_steps() {
   if [ "$2" = fastapi ]; then
     echo "  pnpm install            # installs the web app(s)"
     echo "  (cd server && uv sync)  # installs the Python server"
+    pt_data_steps "$2" "$5" "$1"
     echo "  pnpm dev                # starts the web app(s)"
     echo "  make -C server dev      # starts the server on port 8000, in another terminal"
   else
     echo "  pnpm install            # installs every package and builds the contract package"
+    pt_data_steps "$2" "$5" "$1"
     echo "  pnpm dev                # starts the web app(s) and the server on port 8000"
   fi
   if [ "$4" = next ]; then web_port=3000; else web_port=5173; fi
@@ -174,7 +215,7 @@ pt_next_steps() {
 # pt_main <args...>: validate, compose in a temporary directory, move into place.
 pt_main() {
   export LC_ALL=C
-  if [ "$#" -ne 4 ] && [ "$#" -ne 7 ]; then
+  if [ "$#" -lt 4 ]; then
     pt_usage
     return 2
   fi
@@ -182,13 +223,29 @@ pt_main() {
   web_fw="$2"
   web_ui="$3"
   server="$4"
+  shift 4
   dash_fw=""
   dash_ui=""
-  if [ "$#" -eq 7 ]; then
-    [ "$5" = "--dashboard" ] || { pt_usage; return 2; }
-    dash_fw="$6"
-    dash_ui="$7"
-  fi
+  data=""
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --dashboard)
+        { [ "$#" -ge 3 ] && [ -z "$dash_fw" ]; } || { pt_usage; return 2; }
+        dash_fw="$2"
+        dash_ui="$3"
+        shift 3
+        ;;
+      --data)
+        { [ "$#" -ge 2 ] && [ -z "$data" ]; } || { pt_usage; return 2; }
+        data="$2"
+        shift 2
+        ;;
+      *)
+        pt_usage
+        return 2
+        ;;
+    esac
+  done
 
   case "$project" in
     "" | [!A-Za-z0-9]* | *[!A-Za-z0-9._-]*)
@@ -202,6 +259,9 @@ pt_main() {
   if [ -n "$dash_fw" ]; then
     pt_choice "$dash_fw" next vite || { pt_fail "unknown dashboard framework \"$dash_fw\" (next or vite)"; return 2; }
     pt_choice "$dash_ui" plain antd mui heroui || { pt_fail "unknown dashboard UI choice \"$dash_ui\" (plain, antd, mui or heroui)"; return 2; }
+  fi
+  if [ -n "$data" ]; then
+    pt_choice "$data" postgres sqlite redis postgres,redis sqlite,redis || { pt_fail "unknown data choice \"$data\" (postgres, sqlite, redis, postgres,redis or sqlite,redis)"; return 2; }
   fi
 
   target="$PWD/$project"
@@ -231,14 +291,14 @@ pt_main() {
   fi
 
   mkdir "$work/root" || return 1
-  pt_compose "$archive" "$work/root" "$web_fw" "$web_ui" "$server" "$dash_fw" "$dash_ui" || return 1
+  pt_compose "$archive" "$work/root" "$web_fw" "$web_ui" "$server" "$dash_fw" "$dash_ui" "$data" || return 1
 
   if [ -e "$target" ] || [ -L "$target" ]; then
     pt_fail "$project appeared while the project was being composed; nothing was moved"
     return 1
   fi
   mv "$work/root" "$target" || { pt_fail "could not move the project into place"; return 1; }
-  pt_next_steps "$project" "$server" "$dash_fw" "$web_fw"
+  pt_next_steps "$project" "$server" "$dash_fw" "$web_fw" "$data"
 }
 
 pt_main "$@"

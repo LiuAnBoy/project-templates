@@ -1,0 +1,36 @@
+# Development services for this project. The credentials are fake and for
+# local development only; never reuse them anywhere else.
+# Start:               docker compose -f docker-compose.dev.yml up -d --wait
+# Stop:                docker compose -f docker-compose.dev.yml down
+# Stop and drop data:  docker compose -f docker-compose.dev.yml down -v
+# Compose reads .env in this directory for the values below; copy
+# .env.example to .env first.
+
+services:
+  postgres:
+    image: postgres:18-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DATABASE:-app}
+      POSTGRES_USER: ${POSTGRES_USER:-app}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-dev-only-postgres-pw-9f3a}
+    ports:
+      - '127.0.0.1:${POSTGRES_PORT:-5432}:5432'
+    volumes:
+      - postgres-data:/var/lib/postgresql
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"']
+      interval: 5s
+      timeout: 3s
+      retries: 12
+  redis:
+    image: redis:8-alpine
+    ports:
+      - '127.0.0.1:${REDIS_PORT:-6379}:6379'
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+volumes:
+  postgres-data:
