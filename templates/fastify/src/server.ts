@@ -20,6 +20,7 @@ import {
   registerRequestId,
   resolveRequestId,
 } from './common/http/request-id.js';
+import type { DependencyCheck } from './common/dependency-checks.js';
 import { healthRoutes } from './health/routes.js';
 import type { ServerModule } from './common/module.js';
 import { createLogger } from './common/logging/logger-options.js';
@@ -42,6 +43,8 @@ export type ServerOptions = {
   trustProxy?: TrustProxy;
   /** The request limit; 300 per 60 seconds, in process memory, when omitted. */
   rateLimit?: RateLimitOptions;
+  /** The dependency checks the health route runs; none when omitted. */
+  checks?: readonly DependencyCheck[];
   /** The domains to mount under `/api/v1`; each is built by its own factory. */
   modules?: ServerModule[];
 };
@@ -54,7 +57,7 @@ export type ServerOptions = {
  * limit, the error handlers and the body parser go on the root instance before
  * any route, so every scope inherits them.
  *
- * @param options - Log level, log stream, proxy trust, rate limit and the modules to mount.
+ * @param options - Log level, log stream, proxy trust, rate limit, the dependency checks and the modules to mount.
  * @returns The configured instance, not yet listening.
  */
 export async function buildServer(options: ServerOptions = {}) {
@@ -79,7 +82,7 @@ export async function buildServer(options: ServerOptions = {}) {
   registerJsonBodyParser(app);
   await app.register(helmet, { contentSecurityPolicy: false });
 
-  await app.register(healthRoutes);
+  await app.register(healthRoutes, { checks: options.checks });
 
   for (const module of options.modules ?? []) {
     await app.register(module, { prefix: '/api/v1' });

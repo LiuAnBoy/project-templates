@@ -193,7 +193,7 @@ test('a broken relative link fails, a link inside code does not', () => {
 test('a missing required path fails for each type', () => {
   const dirs = {
     web: 'docs/components/http-client.md',
-    nest: 'docs/rules/redis.md',
+    nest: 'docs/rules/data.md',
     fastify: 'src/server.ts',
     fastapi: 'docs/database.md',
     workspace: 'docs/contract.md',

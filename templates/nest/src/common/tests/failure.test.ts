@@ -20,6 +20,41 @@ describe('dependency outage classification', () => {
     ).toBe(true);
   });
 
+  it('recognises a SQLite database that is busy, locked or cannot be opened', () => {
+    for (const code of [
+      'SQLITE_BUSY',
+      'SQLITE_BUSY_SNAPSHOT',
+      'SQLITE_LOCKED',
+      'SQLITE_CANTOPEN',
+    ]) {
+      expect(isDependencyOutage({ code })).toBe(true);
+      expect(isDependencyOutage(new Error('query', { cause: { code } }))).toBe(
+        true,
+      );
+    }
+  });
+
+  it('recognises the errors a Redis client raises while it has no connection', () => {
+    expect(isDependencyOutage(new Error('Connection is closed.'))).toBe(true);
+    expect(
+      isDependencyOutage(
+        new Error(
+          "Stream isn't writeable and enableOfflineQueue options is false",
+        ),
+      ),
+    ).toBe(true);
+    const exhausted = new Error('Reached the max retries per request limit');
+    exhausted.name = 'MaxRetriesPerRequestError';
+    expect(isDependencyOutage(exhausted)).toBe(true);
+  });
+
+  it('does not treat a SQLite constraint error or another Redis error as an outage', () => {
+    expect(isDependencyOutage({ code: 'SQLITE_CONSTRAINT_UNIQUE' })).toBe(
+      false,
+    );
+    expect(isDependencyOutage(new Error('WRONGTYPE Operation'))).toBe(false);
+  });
+
   it('does not treat a statement error or a plain bug as an outage', () => {
     expect(isDependencyOutage({ code: '42P01' })).toBe(false);
     expect(isDependencyOutage(new TypeError('x is not a function'))).toBe(

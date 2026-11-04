@@ -47,8 +47,7 @@ const RULES_WEB = ['architecture', 'data-layer', 'testing', 'ui'].map(
 const RULES_SERVER = [
   'architecture',
   'api-and-errors',
-  'postgres',
-  'redis',
+  'data',
   'patterns',
   'docs-to-update',
 ].map((n) => `docs/rules/${n}.md`);

@@ -1,4 +1,5 @@
 import json
+import sqlite3
 
 import pytest
 from fastapi.testclient import TestClient
@@ -107,3 +108,61 @@ def test_a_cause_chain_is_followed() -> None:
 @pytest.mark.parametrize("error", [SqlStateError("42P01"), TypeError("x"), ValueError()])
 def test_statement_errors_and_bugs_are_not_outages(error: BaseException) -> None:
     assert not is_dependency_outage(error)
+
+
+def _foreign_error(module: str, name: str, **attributes: object) -> BaseException:
+    """An error of class ``name`` in ``module``, standing in for a driver that is not installed."""
+    cls = type(name, (Exception,), {"__module__": module, **attributes})
+    return cls("driver message with a secret host")
+
+
+def _with_errorname(errorname: str) -> BaseException:
+    error = sqlite3.OperationalError("x")
+    error.sqlite_errorname = errorname  # type: ignore[attr-defined]
+    return error
+
+
+def test_a_sqlite_database_that_cannot_be_opened_is_an_outage() -> None:
+    with pytest.raises(sqlite3.OperationalError) as raised:
+        sqlite3.connect("file:/no/such/dir/app.db?mode=rw", uri=True)
+
+    assert is_dependency_outage(raised.value)
+
+
+@pytest.mark.parametrize("errorname", ["SQLITE_BUSY", "SQLITE_BUSY_SNAPSHOT", "SQLITE_LOCKED"])
+def test_a_busy_or_locked_sqlite_database_is_an_outage(errorname: str) -> None:
+    assert is_dependency_outage(_with_errorname(errorname))
+
+
+def test_a_sqlite_constraint_error_is_not_an_outage() -> None:
+    assert not is_dependency_outage(_with_errorname("SQLITE_CONSTRAINT_UNIQUE"))
+
+
+@pytest.mark.parametrize("name", ["ConnectionError", "TimeoutError", "BusyLoadingError"])
+def test_a_redis_connection_or_timeout_error_is_an_outage(name: str) -> None:
+    connection = type("ConnectionError", (Exception,), {"__module__": "redis.exceptions"})
+    error = (
+        _foreign_error("redis.exceptions", name)
+        if name != "BusyLoadingError"
+        else type("BusyLoadingError", (connection,), {"__module__": "redis.exceptions"})("loading")
+    )
+
+    assert is_dependency_outage(error)
+
+
+def test_another_redis_error_is_not_an_outage() -> None:
+    assert not is_dependency_outage(_foreign_error("redis.exceptions", "ResponseError"))
+
+
+def test_a_psycopg_failed_connect_is_an_outage_through_a_wrapper() -> None:
+    failed = _foreign_error("psycopg.errors", "OperationalError", sqlstate=None)
+    try:
+        raise RuntimeError("query failed") from failed
+    except RuntimeError as outer:
+        assert is_dependency_outage(outer)
+
+
+def test_a_psycopg_error_the_server_reported_is_not_an_outage() -> None:
+    deadlock = _foreign_error("psycopg.errors", "OperationalError", sqlstate="40P01")
+
+    assert not is_dependency_outage(deadlock)

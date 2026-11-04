@@ -137,7 +137,7 @@ body 用 pydantic model 驗證，失敗一律是 `invalid request`。空的 JSON
 
 wire 上的 query key、body 欄位與 `data` 內每個 key 都是 snake_case。Python 程式碼本來就是 snake_case，model 的欄位直接用 wire 的名稱，不需要轉換；不要加 camelCase 的 alias，也不要用通用的 key 改寫器。
 
-資料庫的表與欄位也是 snake_case，規則見 [../rules/postgres.md](../rules/postgres.md)。
+資料庫的表與欄位也是 snake_case，規則見 [../rules/data.md](../rules/data.md)。
 
 ## 建構器與 wrapper
 

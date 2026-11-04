@@ -47,9 +47,10 @@ for (const framework of WEB_FRAMEWORKS) {
   ];
 }
 
-recipes.nest = ['source/server/common', 'source/server/node', 'source/server/nest'];
-recipes.fastify = ['source/server/common', 'source/server/node', 'source/server/fastify'];
-recipes.fastapi = ['source/server/common', 'source/server/fastapi'];
+// The empty-store block comes last in a base and is left out of every data overlay.
+recipes.nest = ['source/server/common', 'source/server/node', 'source/server/nest', 'source/data/none'];
+recipes.fastify = ['source/server/common', 'source/server/node', 'source/server/fastify', 'source/data/none'];
+recipes.fastapi = ['source/server/common', 'source/server/fastapi', 'source/data/none'];
 recipes.workspace = ['source/workspace'];
 
 /**

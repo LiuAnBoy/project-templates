@@ -1,8 +1,8 @@
 ## Stack
 
-Stack: FastAPI on Python 3.12 or later, pydantic 2 and pydantic-settings, loguru, pytest, ruff, uv. No database yet; when one is needed: PostgreSQL through SQLAlchemy 2 with Alembic migrations generated from the models (`docs/rules/postgres.md`).
+Stack: FastAPI on Python 3.12 or later, pydantic 2 and pydantic-settings, loguru, pytest, ruff, uv. Data rules, and the store when the project has one, are in `docs/rules/data.md`.
 
-This is a starter with two public routes, `GET /api/v1/hello` and the liveness probe `GET /api/health` (outside `/api/v1` and the envelope), built on the shared handlers (envelope, failure table, exception handlers, request id, access log). Add modules on top of them; do not rewrite them.
+This is a starter with two public routes, `GET /api/v1/hello` and the health route `GET /api/health` (outside `/api/v1` and the envelope), built on the shared handlers (envelope, failure table, exception handlers, request id, access log) and the `src/infra/` seam that holds what the process depends on. Add modules on top of them; do not rewrite them.
 
 ## FastAPI rules
 
@@ -13,8 +13,8 @@ This is a starter with two public routes, `GET /api/v1/hello` and the liveness p
 - Wire format (`docs/rules/api-and-errors.md`): every wire key is snake_case, which Python code already is, so nothing is converted; ids are UUIDs, strings on the wire; instants are ISO 8601 strings; paths are plural kebab-case; `page_size` defaults to 20 and is capped at 100; failure messages are English.
 - Services raise `ApiError` with a code from the failure table in `src/core/errors.py`; the code is never serialised. A new failure is a new table entry plus a row in the failure table of `docs/apis/conventions.md`.
 - Auth: this template ships no authentication. Every route it has is public. Before any non-public route ships, add an app-level dependency (`FastAPI(dependencies=[Depends(current_user)])`) with an explicit `@public` opt-out; the steps are in `docs/rules/api-and-errors.md` (Auth). Never describe this service as protected until those steps are done.
-- The server listens on port 8000 and boots with no `.env` and an empty environment. Add a setting only when code reads it, in `src/core/config.py`, with a fake value in `.env.example`.
-- Tests live in top-level `tests/<module>/test_*.py`, mirroring `src/`.
+- Add a setting only when code reads it, in `src/core/config.py`, with a fake value in `.env.example`; a setting that names a service the server cannot run without is declared in `src/infra/settings.py` and is required.
+- Tests live in top-level `tests/<module>/test_*.py`, mirroring `src/`. `tests/conftest.py` loads the fake settings of `.env.example` and replaces `main.create_infra` with a seam that has no checks, so `make test` needs no service.
 - Comments and docstrings are English; Google-style docstrings (`Args:`, `Returns:`, `Raises:`), enforced by ruff.
 
 ## Commands

@@ -6,9 +6,10 @@ These rules govern all new code in this project. It is organised by module, with
 
 ```text
 src/
-  main.py                  # create_app(): middleware, handlers, routers; serves when run directly
+  main.py                  # create_app(): infra, middleware, handlers, routers, lifespan; serves when run directly
+  infra/                   # the seam: create_infra(config), types.py, settings.py; what the process depends on
   core/
-    config.py              # pydantic-settings
+    config.py              # pydantic-settings; Settings extends infra.settings.InfraSettings
     errors.py              # FAILURES table and ApiError
     envelope.py            # success, listing, failure and the response models
     handlers.py            # exception handlers
@@ -17,6 +18,7 @@ src/
     logging.py             # loguru setup
     paging.py              # page_params and MAX_PAGE_SIZE
     dependency.py          # is_dependency_outage
+    dependency_checks.py   # DependencyCheck, HealthProbe and the startup gate
     registry.py            # create_registry()
     bounded.py             # deadline for dependency calls
   <module>/
@@ -39,11 +41,11 @@ Router to service to repository, and `core/` is imported by everyone and imports
 
 ## Config
 
-`core/config.py` holds one `BaseSettings` class, read once at boot; an invalid value stops the process before it serves. Every field has a development default, so the server boots with no `.env`. Add a field when code reads it, and add it to `.env.example` with a fake value. The server listens on port 8000 by default.
+`core/config.py` holds one `BaseSettings` class, read once at boot; an invalid or missing required value stops the process before it serves, naming the field and never its value (`hide_input_in_errors`). A field has a development default unless it names a service the server cannot run without (`data.md`, Dependencies); the connection settings of a store are declared in `infra/settings.py`, whose `InfraSettings` class `Settings` extends. Add a field when code reads it, and add it to `.env.example` with a fake value; the tests run with the values of that file, so a required field left out fails them. The server listens on port 8000 by default.
 
 ## Router and dependencies
 
-- A router function parses input through its schema, calls one service function, and returns the envelope helper's result. No SQL, no business rule.
+- A router function parses input through its schema, calls one service function, and returns the envelope helper's result. No query, no business rule.
 - Declare `response_model=Envelope[Model]` (or `ListEnvelope[Model]`) so the schema comes from the same pydantic models as the wire.
 - Authentication is not shipped (see `api-and-errors.md`, Auth). When added it is mounted once, at the app, as `FastAPI(dependencies=[Depends(current_user)])`, and a public route opts out with an explicit marker.
 - The interactive docs and the OpenAPI document are switched off. Anything added with `app.mount` or `add_route` bypasses app-level dependencies, so mount nothing outside the routers.
@@ -51,6 +53,15 @@ Router to service to repository, and `core/` is imported by everyone and imports
 ## Extension
 
 Capabilities are added through ports and `create_xxx(deps)` factories, connected at one wiring place. See `extending.md`; `hello` is the model.
+
+## The infrastructure seam
+
+`src/infra/` is the one place that knows what the process depends on. `create_infra(config)` returns an `Infra` with the dependency checks, an optional shared storage for the rate limit and a close function; `create_app` passes the checks to the `HealthProbe` behind the health route, the storage to `RateLimitMiddleware`, and runs the checks and the close in its lifespan. A project with no store returns no checks, no storage and a close that does nothing, so it starts as the base does. A data overlay replaces `infra/infra.py` and `infra/settings.py`, and nothing else changes.
+
+- Startup: the lifespan runs every check under `bounded()` before it yields, so a failure stops the start before the server listens: uvicorn exits non-zero (3) naming the check and never a value.
+- A dependency lost after startup answers 503 through `is_dependency_outage`; the process stays up. A limiter storage that cannot be reached answers the 503 failure envelope, because `RateLimitMiddleware` sits outside the exception handlers and answers it itself.
+- Factories connect on first use, so building the real seam touches no service at import.
+- Tests: `tests/conftest.py` replaces `main.create_infra` with a seam that has no checks and no storage in an autouse fixture, because tests call `create_app` themselves and `TestClient` runs the lifespan.
 
 ## Errors and logging
 
@@ -60,13 +71,13 @@ Capabilities are added through ports and `create_xxx(deps)` factories, connected
 
 ## Data access
 
-This template ships no database. When one is added, follow `postgres.md`: the service opens the transaction and passes the connection to the repository, and SQL lives only in repositories.
+The rules are in `data.md`: the service opens the transaction and passes the handle to the repository, and queries live only in repositories. A store's own page adds what is specific to it.
 
 ## Tests
 
-- Tests sit in top-level `tests/<module>/test_*.py`, mirroring `src/`, and run once with `make test`.
-- `tests/conftest.py` builds a fresh application with `create_app()` and a `TestClient(raise_server_exceptions=False)`, so an unexpected error is answered like a server answers it instead of re-raised. A test that needs a route which fails on purpose adds a test-only router to that application. A test that needs another setting passes its own, `create_app(Settings(_env_file=None, rate_limit_max=2))`.
-- Test the service against a real database; stub only external services.
+- Tests sit in top-level `tests/<module>/test_*.py`, mirroring `src/`, and run once with `make test`, which needs no service. Tests that need a real store live in `tests_integration/` and run through their own target.
+- `tests/conftest.py` puts the fake settings of `.env.example` in the environment before `main` is imported, builds a fresh application with `create_app()` and a `TestClient(raise_server_exceptions=False)`, so an unexpected error is answered like a server answers it instead of re-raised. A test that needs a route which fails on purpose adds a test-only router to that application. A test that needs another setting passes its own, `create_app(Settings(_env_file=None, rate_limit_max=2))`.
+- Test the service against a real store; stub only external services.
 - Guard the contract of each route (status and envelope) and every risky path; one regression test per real bug.
 
 ## Adding a module

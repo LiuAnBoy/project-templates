@@ -1,8 +1,11 @@
 import pytest
 from fastapi.testclient import TestClient
+from limits.aio.storage import MemoryStorage
 
+import main
 from core.config import Settings
 from core.rate_limit import client_key, parse_trusted_proxies
+from infra.types import Infra
 from main import create_app
 
 TOO_MANY = '{"success":false,"payload":{"message":"too many requests"}}'
@@ -117,3 +120,53 @@ def test_addresses_of_one_ipv6_network_share_a_bucket_and_a_mapped_ipv4_is_ipv4(
     assert key("2001:db8::1") == key("2001:db8::ffff")
     assert key("2001:db8::1") != key("2001:db9::1")
     assert key("::ffff:1.2.3.4") == key("1.2.3.4")
+
+
+class _DownStorage(MemoryStorage):
+    """A limiter storage whose store is gone, or whose code is broken."""
+
+    def __init__(self, error: Exception) -> None:
+        super().__init__()
+        self._error = error
+
+    async def incr(self, *args: object, **kwargs: object) -> int:  # type: ignore[override]
+        raise self._error
+
+
+async def _no_close() -> None:
+    return None
+
+
+def _client_with_storage(monkeypatch: pytest.MonkeyPatch, storage: MemoryStorage) -> TestClient:
+    monkeypatch.setattr(
+        main,
+        "create_infra",
+        lambda config: Infra(checks=(), rate_limit_storage=storage, close=_no_close),
+    )
+    return TestClient(
+        create_app(Settings(_env_file=None)), client=PROXY, raise_server_exceptions=False
+    )
+
+
+def test_a_limiter_storage_that_is_down_answers_the_503_failure_envelope(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    storage = _DownStorage(ConnectionRefusedError("connect ECONNREFUSED secret-host:1"))
+    client = _client_with_storage(monkeypatch, storage)
+
+    response = client.get("/api/v1/hello")
+
+    assert response.status_code == 503
+    assert response.text == '{"success":false,"payload":{"message":"service unavailable"}}'
+    assert "secret" not in response.text
+    assert response.headers["x-request-id"]
+
+
+def test_a_limiter_storage_with_a_bug_is_not_hidden_as_an_outage(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = _client_with_storage(monkeypatch, _DownStorage(TypeError("not an outage")))
+
+    response = client.get("/api/v1/hello")
+
+    assert response.status_code == 500

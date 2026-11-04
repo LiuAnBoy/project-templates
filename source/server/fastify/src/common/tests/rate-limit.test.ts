@@ -74,6 +74,7 @@ describe('rate limit', () => {
 
   it('follows the configured values', async () => {
     const config = loadConfig({
+      ...process.env,
       RATE_LIMIT_MAX: '1',
       RATE_LIMIT_WINDOW_SECONDS: '30',
     });

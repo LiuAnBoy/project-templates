@@ -3,17 +3,19 @@
 from typing import Literal
 
 from pydantic import Field, field_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import SettingsConfigDict
 
 from core.rate_limit import parse_trusted_proxies
+from infra.settings import InfraSettings
 
 
-class Settings(BaseSettings):
+class Settings(InfraSettings):
     """Process configuration.
 
-    Every field has a default for local development, so the server boots with no
-    ``.env`` and an empty environment. Add a field when code reads it, and add it
-    to ``.env.example`` with a fake value.
+    Give a field a default for local development unless it names a service the
+    server cannot run without; such a setting is required (see
+    ``docs/rules/data.md``) and is declared on ``InfraSettings``. Add a field when
+    code reads it, and add it to ``.env.example`` with a fake value.
 
     Attributes:
         host: The interface to listen on.

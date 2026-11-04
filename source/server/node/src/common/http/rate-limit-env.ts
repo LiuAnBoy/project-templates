@@ -61,7 +61,7 @@ export function parseTrustProxy(raw: string | undefined): TrustProxy {
 /**
  * The environment variables of the rate limit, to spread into an env schema.
  *
- * Every field has a default, so the server boots with no `.env`.
+ * Every field has a default, so these variables never need a `.env`.
  */
 export const rateLimitEnv = {
   RATE_LIMIT_MAX: z.coerce

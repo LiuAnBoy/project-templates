@@ -2,8 +2,10 @@
 
 The counts live in a ``limits`` storage, which is the port: this module is given
 one and never builds it. :func:`create_memory_storage` is the default, one
-process's memory; an implementation shared across instances replaces it at the
-wiring place in ``main.py`` and nothing else changes.
+process's memory; an implementation shared across instances, which the infra seam
+hands to ``create_app``, replaces it and nothing else changes. A storage that cannot
+be reached fails closed: the request is answered 503 in the failure envelope. The
+middleware sits outside the exception handlers, so it answers that itself.
 """
 
 import math
@@ -20,10 +22,12 @@ from ipaddress import (
 from limits import RateLimitItemPerSecond
 from limits.aio.storage import MemoryStorage, Storage
 from limits.aio.strategies import FixedWindowRateLimiter
+from loguru import logger
 from starlette.datastructures import Headers
 from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 
+from core.dependency import is_dependency_outage
 from core.envelope import failure
 from core.errors import FAILURES
 
@@ -189,7 +193,10 @@ class RateLimitMiddleware:
     One fixed window per client, counted across every route. The answer is the
     failure table's ``too_many_requests`` in the failure envelope, with
     ``Retry-After``. A path in ``exempt_paths`` (a probe, say) is neither counted nor
-    refused; nothing is exempt by default.
+    refused; nothing is exempt by default. When the storage cannot be reached (an
+    error :func:`core.dependency.is_dependency_outage` accepts) the request is
+    refused with the table's ``unavailable`` 503 instead of passing unlimited; any
+    other storage error is a bug and propagates.
     """
 
     def __init__(
@@ -231,7 +238,16 @@ class RateLimitMiddleware:
             return
 
         key = client_key(scope, self._trusted)
-        if await self._limiter.hit(self._item, key):
+        try:
+            allowed = await self._limiter.hit(self._item, key)
+        except Exception as error:
+            if not is_dependency_outage(error):
+                raise
+            logger.opt(exception=error).error("rate limit storage unreachable")
+            status, message = FAILURES["unavailable"]
+            await JSONResponse(failure(message), status_code=status)(scope, receive, send)
+            return
+        if allowed:
             await self.app(scope, receive, send)
             return
 

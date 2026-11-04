@@ -1,8 +1,8 @@
 ## Stack
 
-Stack: Fastify 5, zod validation (fastify-type-provider-zod), pino, dayjs behind `src/common/date.ts`, Vitest, ESLint 10 and Prettier, pnpm. No database yet; when one is needed: PostgreSQL through Drizzle with migrations generated from its schema (`docs/rules/postgres.md`).
+Stack: Fastify 5, zod validation (fastify-type-provider-zod), pino, dayjs behind `src/common/date.ts`, Vitest, ESLint 10 and Prettier, pnpm. Data rules, and the store when the project has one, are in `docs/rules/data.md`.
 
-This is a starter with two public routes, `GET /api/v1/hello` and the liveness probe `GET /api/health` (outside `/api/v1` and the envelope), built on the shared handlers (envelope, failure table, error handler, request id, access log). Add domains on top of them; do not rewrite them.
+This is a starter with two public routes, `GET /api/v1/hello` and the health route `GET /api/health` (outside `/api/v1` and the envelope), built on the shared handlers (envelope, failure table, error handler, request id, access log) and the `createInfra` seam in `src/infra/` that holds what the process depends on. Add domains on top of them; do not rewrite them.
 
 ## Fastify rules
 
@@ -11,7 +11,8 @@ This is a starter with two public routes, `GET /api/v1/hello` and the liveness p
 - Validate at the edge with zod (environment, request and response schemas) through the type provider.
 - Every answer uses the one response envelope. Routes return `success(...)` or `paginated(...)` and declare `successEnvelope(...)` or `pagedEnvelope(...)` as the response schema; only `registerErrorHandling` builds a failure body. Lists are always paged.
 - Auth: this template ships no authentication. Every route it has is public. Before any non-public route ships, add an `onRequest` hook on the root instance with an explicit `config: { public: true }` opt-out; the steps are in `docs/rules/api-and-errors.md` (Auth). Never describe this service as protected until those steps are done.
-- The server listens on port 8000 and boots with no `.env` and an empty environment. Add an environment variable only when code reads it, in `src/config.ts`, with a fake value in `.env.example`.
+- The server listens on port 8000. Add an environment variable only when code reads it, in `src/config.ts`, with a fake value in `.env.example`; a variable that names a service the server cannot run without is declared in `src/infra/infra-env.ts` and is required.
+- Tests call `buildServer` directly and pass no seam, and the test runner loads the fake values of `.env.example`, so `pnpm test` needs no service.
 
 ## Standard flow for adding a feature
 

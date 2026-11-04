@@ -4,6 +4,8 @@ import type { NestFastifyApplication } from '@nestjs/platform-fastify';
 import { Test, type TestingModuleBuilder } from '@nestjs/testing';
 
 import { AppModule } from '../app.module.js';
+import { InfraModule } from '../infra/infra.module.js';
+import { StubInfraModule } from './stub-infra.module.js';
 import { validateEnv, type Env } from '../config/env.js';
 import {
   applicationOptions,
@@ -13,6 +15,11 @@ import {
 
 /**
  * Boots the real application the way `main.ts` does, without listening.
+ *
+ * `InfraModule` is replaced by `StubInfraModule`, with no checks and no shared
+ * storage, before the caller's `override` runs; so the ordinary tests need no
+ * service whatever overlay the project has, and `main.ts` and its startup
+ * check are never reached.
  *
  * @param controllers - Extra controllers, for tests that need a route which fails on purpose.
  * @param override - Swaps providers at the wiring point, e.g. `(b) => b.overrideProvider(GREETER).useValue(fake)`.
@@ -31,6 +38,8 @@ export async function createTestApp(
   const config = { get: (key: keyof Env) => values[key] };
   const moduleRef = await override(
     Test.createTestingModule({ imports: [AppModule], controllers })
+      .overrideModule(InfraModule)
+      .useModule(StubInfraModule)
       .overrideProvider(ConfigService)
       .useValue(config),
   ).compile();

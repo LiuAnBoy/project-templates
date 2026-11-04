@@ -4,7 +4,7 @@
 
 ## 技術棧
 
-Fastify 5、TypeScript 6、zod 4（fastify-type-provider-zod）、pino、dayjs（只在 `src/common/date.ts` 使用）、Vitest、ESLint 10 與 Prettier、pnpm。沒有資料庫、認證、Redis、佇列、信件、檔案儲存，也沒有 OpenAPI 文件。健康檢查只有一條不碰任何相依服務的 liveness 路由。
+Fastify 5、TypeScript 6、zod 4（fastify-type-provider-zod）、pino、dayjs（只在 `src/common/date.ts` 使用）、Vitest、ESLint 10 與 Prettier、pnpm。沒有認證、佇列、信件、檔案儲存，也沒有 OpenAPI 文件。資料儲存在建立專案時選定，通則見 [`rules/data.md`](rules/data.md)；程序依賴的東西都集中在 `src/infra/` 的 `createInfra`。
 
 ## 請求如何流過
 
@@ -26,11 +26,11 @@ Fastify 5、TypeScript 6、zod 4（fastify-type-provider-zod）、pino、dayjs�
 | `pnpm lint`         | ESLint                                    |
 | `pnpm format:check` | Prettier 檢查（`pnpm format` 會直接改檔） |
 | `pnpm typecheck`    | TypeScript 型別檢查                       |
-| `pnpm test`         | Vitest 單次執行                           |
+| `pnpm test`         | Vitest 單次執行，不需要任何外部服務       |
 
 ## 環境變數
 
-啟動時只讀一次並驗證，位置在 `src/config.ts`。沒有 `.env` 也能啟動；`.env.example` 只放假的範例值。
+啟動時只讀一次並驗證，位置在 `src/config.ts`；程序依賴的服務所需的連線設定宣告在 `src/infra/infra-env.ts`，沒有預設值、必填，缺少時拒絕啟動並指出變數名稱（不印出值）。`.env.example` 只放假的範例值，測試也以它的值執行。
 
 | 變數                        | 預設值        | 說明                                                                         |
 | --------------------------- | ------------- | ---------------------------------------------------------------------------- |
@@ -45,7 +45,8 @@ Fastify 5、TypeScript 6、zod 4（fastify-type-provider-zod）、pino、dayjs�
 ## 目前的模組
 
 - `hello`（`src/hello/`）：`GET /api/v1/hello`，`routes.ts`、`service.ts`、`schemas.ts` 各一個檔案。
-- `health`（`src/health/`）：`GET /api/health`，只有 `routes.ts`；在 `/api/v1` 之外，回封套之外的 `{"status":"ok"}`，不受速率限制。
+- `health`（`src/health/`）：`GET /api/health`，只有 `routes.ts`；在 `/api/v1` 之外，回封套之外的 `{"status":"ok"}`，不受速率限制。它執行 `buildServer` 傳入的依賴檢查，任一失敗或逾時回 503 `{"status":"unavailable"}`。
+- `infra`（`src/infra/`）：`createInfra(config)` 回傳依賴檢查、可選的速率限制共用 store 與 close 函式；伺服器開始監聽之前，`main.ts` 先執行所有依賴檢查，失敗就以非零代碼結束並指出檢查名稱。
 
 ## 擴充方式
 
@@ -61,8 +62,7 @@ Fastify 5、TypeScript 6、zod 4（fastify-type-provider-zod）、pino、dayjs�
 | [`database.md`](database.md)                         | 資料庫現況                          |
 | [`rules/architecture.md`](rules/architecture.md)     | 結構與慣例                          |
 | [`rules/api-and-errors.md`](rules/api-and-errors.md) | 回應格式、錯誤、認證                |
-| [`rules/postgres.md`](rules/postgres.md)             | PostgreSQL、migration 與交易        |
-| [`rules/redis.md`](rules/redis.md)                   | Redis 的鍵、快取、鎖與佇列          |
+| [`rules/data.md`](rules/data.md)                     | 資料的命名、交易與依賴檢查          |
 | [`rules/patterns.md`](rules/patterns.md)             | 常見問題的既定做法                  |
 | [`rules/extending.md`](rules/extending.md)           | 擴充方式：port、工廠函式與 registry |
 | [`rules/docs-to-update.md`](rules/docs-to-update.md) | 變更時要更新哪些文件                |

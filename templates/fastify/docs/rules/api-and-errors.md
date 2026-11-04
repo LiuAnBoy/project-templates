@@ -51,7 +51,7 @@ Rules:
 - Every wire key (query, body and `data`) is snake_case. Code stays camelCase and maps each field explicitly at the boundary: a zod `.transform` on the way in, a mapper function written key by key on the way out. No generic key rewriter, because it also rewrites enum values, slugs and free-form JSON.
 - Paths are plural kebab-case nouns: `/api/v1/order-items`.
 - Ids are UUIDs and travel as strings.
-- Instants travel as ISO 8601 strings with an offset (`2026-11-04T09:30:00.000Z`), never as Unix integers. The database side is in `postgres.md`.
+- Instants travel as ISO 8601 strings with an offset (`2026-11-04T09:30:00.000Z`), never as Unix integers. The storage side is in `data.md`.
 - `page_size` defaults to 20 and is clamped to 100; `page` defaults to 1.
 - Failure messages are fixed English text.
 - Dates are formatted, parsed and compared through `date` in `src/common/date.ts`, the only file that imports dayjs.
@@ -103,9 +103,11 @@ Only the health route is exempt by default, and it is the worked example. A rout
 
 ## The health route
 
-Every route is under `/api/v1/` except `GET /api/health`. It is the liveness probe, mounted on the root in `buildServer` outside the versioned prefix, and it is one of the envelope exceptions above: it answers 200 with exactly `{"status":"ok"}`, because a load balancer reads the bare body. It touches no dependency, because no store ships; a data overlay adds its checks and answers 503 `{"status":"unavailable"}` when one is down. A route with no dependency needs no port or factory.
+Every route is under `/api/v1/` except `GET /api/health`. It is the health probe, mounted on the root in `buildServer` outside the versioned prefix, and it is one of the envelope exceptions above: it answers a bare body, because a load balancer reads it.
 
-It is public and stays public when authentication is added: mark it with the same opt-out as every other open route in the same change. It is exempt from the rate limit.
+- It runs the checks `buildServer` is given through its `checks` option (`createInfra` in `src/infra/` supplies them), each under `bounded()`. All passing, or no checks at all, answers 200 with exactly `{"status":"ok"}`; any failure or timeout answers 503 with exactly `{"status":"unavailable"}`. No check name is in the body; the log names it.
+- It is exempt from the rate limit, so an outage cannot get every instance restarted. Being exempt, it must not give any client a store round trip per request: `createHealthProbe` (`src/common/dependency-checks.ts`) makes concurrent requests share one in-flight run and reuses its result, failure included, for one second, so a flood cannot drain the pool and turn domain routes into 503s.
+- It is public and stays public when authentication is added: mark it with the same opt-out as every other open route in the same change.
 
 ## Auth
 

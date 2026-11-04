@@ -137,7 +137,7 @@ body 用 zod DTO 驗證（`createZodDto`），失敗一律是 `invalid request`�
 
 wire 上的 query key、body 欄位與 `data` 內每個 key 都是 snake_case。輸入：zod schema 讀 snake_case 的 key，`.transform` 產出 service 吃的 camelCase 型別。輸出：每個模組有明確的 mapper 函式，逐個 key 寫出。
 
-資料庫的表與欄位也是 snake_case，規則見 [../rules/postgres.md](../rules/postgres.md)。
+資料庫的表與欄位也是 snake_case，規則見 [../rules/data.md](../rules/data.md)。
 
 ## 建構器與 wrapper
 

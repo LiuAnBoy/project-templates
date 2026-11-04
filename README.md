@@ -107,7 +107,7 @@ pnpm dev          # 同時啟動前端（與後台）和 Node 後端
 
 ## 資料庫
 
-範本不附資料庫，但規則已寫在後端的 `docs/rules/postgres.md`：Node 專案的 schema 與 migration 使用 Drizzle，FastAPI 專案使用 SQLAlchemy 與 Alembic。資料表與欄位一律 snake_case，時間用 `timestamptz`。
+範本本身不附任何資料庫。通則寫在後端的 `docs/rules/data.md`：Node 專案的 schema 與 migration 使用 Drizzle，FastAPI 專案使用 SQLAlchemy 與 Alembic；資料表與欄位一律 snake_case，id 是 UUID，時間在 API 上一律是 ISO 8601 字串。程序依賴的東西（資料庫、快取）集中在後端的 `src/infra/`：伺服器開始監聽之前先檢查它們，失敗就以非零代碼結束並指出名稱（不印出值）；`GET /api/health` 也執行同樣的檢查，失敗時回 503 `{"status":"unavailable"}`。各資料庫自己的規則頁與連線設定，由日後建立專案時選定的資料 overlay 帶入。
 
 ## 修改範本
 

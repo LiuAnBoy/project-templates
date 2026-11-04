@@ -4,12 +4,12 @@
 
 ## 技術棧
 
-FastAPI、Python 3.12 以上、pydantic 2、pydantic-settings、loguru、pytest、ruff、uv。沒有資料庫、認證、Redis、佇列、信件、檔案儲存，也沒有 OpenAPI 文件。健康檢查只有一條不碰任何相依服務的 liveness 路由。
+FastAPI、Python 3.12 以上、pydantic 2、pydantic-settings、loguru、pytest、ruff、uv。沒有認證、佇列、信件、檔案儲存，也沒有 OpenAPI 文件。資料儲存在建立專案時選定，通則見 [`rules/data.md`](rules/data.md)；程序依賴的東西都集中在 `src/infra/` 的 `create_infra`。
 
 ## 請求如何流過
 
 1. `RequestContextMiddleware` 產生或沿用安全的 `x-request-id`，並在回應結束時寫 access log：只記錄路由樣式（例如 `/api/v1/hello`），不記錄實際網址、標頭或本文。
-2. `RateLimitMiddleware` 依來源位址計數，同一個 client 超過上限就回 429（失敗封套）；不存在的路徑也計入。
+2. `RateLimitMiddleware` 依來源位址計數，同一個 client 超過上限就回 429（失敗封套）；不存在的路徑也計入。限流的 storage 連不上時回 503（失敗封套）。
 3. FastAPI 以 pydantic 驗證輸入。
 4. Router 只解析輸入、呼叫 service、回傳 `success(...)`；`response_model=Envelope[...]` 宣告回應格式。
 5. 任何錯誤都由 `core/handlers.py` 的 exception handler 依失敗表回覆；不存在的路由與不允許的方法也是。客戶端看不到框架或內部的訊息。
@@ -24,11 +24,11 @@ FastAPI、Python 3.12 以上、pydantic 2、pydantic-settings、loguru、pytest�
 | `make start`        | 啟動伺服器，預設埠 8000                   |
 | `make lint`         | ruff 檢查                                 |
 | `make format-check` | ruff 格式檢查（`make format` 會直接改檔） |
-| `make test`         | pytest                                    |
+| `make test`         | pytest，不需要任何外部服務                |
 
 ## 環境變數
 
-啟動時只讀一次並驗證，位置在 `src/core/config.py`。沒有 `.env` 也能啟動；`.env.example` 只放假的範例值。
+啟動時只讀一次並驗證，位置在 `src/core/config.py`；程序依賴的服務所需的連線設定宣告在 `src/infra/settings.py`，沒有預設值、必填，缺少時拒絕啟動並指出變數名稱（不印出值）。`.env.example` 只放假的範例值，測試也以它的值執行。
 
 | 變數                        | 預設值    | 說明                                                                         |
 | --------------------------- | --------- | ---------------------------------------------------------------------------- |
@@ -42,7 +42,8 @@ FastAPI、Python 3.12 以上、pydantic 2、pydantic-settings、loguru、pytest�
 ## 目前的模組
 
 - `hello`（`src/hello/`）：`GET /api/v1/hello`，`router.py`、`service.py`、`schemas.py` 各一個檔案。
-- `health`（`src/health/`）：`GET /api/health`，只有 `router.py`；在 `/api/v1` 之外，回封套之外的 `{"status":"ok"}`，不受速率限制。
+- `health`（`src/health/`）：`GET /api/health`，只有 `router.py`；在 `/api/v1` 之外，回封套之外的 `{"status":"ok"}`，不受速率限制。它執行 `create_infra` 提供的依賴檢查，任一失敗或逾時回 503 `{"status":"unavailable"}`。
+- `infra`（`src/infra/`）：`create_infra(config)` 回傳依賴檢查、可選的速率限制共用 storage 與 close 函式；伺服器開始監聽之前，lifespan 先執行所有依賴檢查，失敗就讓 uvicorn 以非零代碼結束並指出檢查名稱。
 
 ## 擴充方式
 
@@ -58,8 +59,7 @@ FastAPI、Python 3.12 以上、pydantic 2、pydantic-settings、loguru、pytest�
 | [`database.md`](database.md)                         | 資料庫現況                          |
 | [`rules/architecture.md`](rules/architecture.md)     | 結構與慣例                          |
 | [`rules/api-and-errors.md`](rules/api-and-errors.md) | 回應格式、錯誤、認證                |
-| [`rules/postgres.md`](rules/postgres.md)             | PostgreSQL、migration 與交易        |
-| [`rules/redis.md`](rules/redis.md)                   | Redis 的鍵、快取、鎖與佇列          |
+| [`rules/data.md`](rules/data.md)                     | 資料的命名、交易與依賴檢查          |
 | [`rules/patterns.md`](rules/patterns.md)             | 常見問題的既定做法                  |
 | [`rules/extending.md`](rules/extending.md)           | 擴充方式：port、工廠函式與 registry |
 | [`rules/docs-to-update.md`](rules/docs-to-update.md) | 變更時要更新哪些文件                |

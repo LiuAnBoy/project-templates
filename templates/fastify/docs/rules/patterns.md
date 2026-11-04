@@ -2,7 +2,7 @@
 
 When a task hits one of the problems below, do not design it again. Each entry is the answer this project uses. An entry belongs here when a second module will meet the same problem; a trade-off that only one module meets stays in that module's own documentation.
 
-This template ships no database, auth or queue yet, so the examples show the shape the answer takes once they exist. The names `AppError`, `bounded`, `isDependencyOutage` and `describeFailure` are real and live under `src/common/`.
+The examples show the shape an answer takes once the store, auth or queue it needs exists; the store-neutral data rules are in `data.md`. The names `AppError`, `bounded`, `isDependencyOutage` and `describeFailure` are real and live under `src/common/`.
 
 ## Who may do this?
 
@@ -48,7 +48,7 @@ Read-then-write does not stop concurrency: two requests both read "not there yet
 
 - Do not enqueue a delayed job for a future moment. Store the due time on the row and let a scheduled sweep select rows that are due. A lost enqueue then costs nothing, because the next sweep finds the row anyway.
 - Sweeps are idempotent: running one twice changes nothing the second time, because each step claims its row atomically (see above).
-- Enqueue work that must follow a change only after the transaction that caused it has committed (`postgres.md`, `redis.md`).
+- Enqueue work that must follow a change only after the transaction that caused it has committed (`data.md`, Queries and transactions).
 
 ## This table keeps growing
 

@@ -5,10 +5,12 @@
  * means "we are fine, something we need is not, come back", 500 means "we are
  * broken". A client should retry the first and report the second.
  *
- * The check is an allowlist of the two things only a broken connection
- * produces, wherever they hide in the cause chain: a network errno, or a
- * PostgreSQL SQLSTATE of the connection classes. Anything unrecognised is not
- * an outage, so a new failure mode arrives as a 500 that gets investigated.
+ * The check is an allowlist of what only a broken connection produces,
+ * wherever it hides in the cause chain: a network errno, a PostgreSQL SQLSTATE
+ * of the connection classes, a SQLite code for a database that is busy, locked
+ * or cannot be opened, or an error a Redis client raises while it has no
+ * connection. Anything unrecognised is not an outage, so a new failure mode
+ * arrives as a 500 that gets investigated.
  */
 import { flattenCauses } from './failure.js';
 
@@ -24,6 +26,22 @@ const ERRNOS: ReadonlySet<string> = new Set([
   'EAI_AGAIN',
 ]);
 
+/** SQLite result codes, with their extended forms, that mean the database is not usable now. */
+const SQLITE_OUTAGE_PREFIXES = [
+  'SQLITE_BUSY',
+  'SQLITE_LOCKED',
+  'SQLITE_CANTOPEN',
+] as const;
+
+/** Messages a Redis client (ioredis) raises when it holds no connection and fails the command. */
+const REDIS_OFFLINE_MESSAGES: ReadonlySet<string> = new Set([
+  'Connection is closed.',
+  "Stream isn't writeable and enableOfflineQueue options is false",
+]);
+
+/** The class name ioredis gives the error of a command that outlived its retries. */
+const REDIS_RETRIES_EXHAUSTED = 'MaxRetriesPerRequestError';
+
 /**
  * PostgreSQL states that mean the connection, not the statement.
  *
@@ -36,6 +54,40 @@ const ERRNOS: ReadonlySet<string> = new Set([
 function isConnectionSqlState(state: string): boolean {
   return (
     state.startsWith('08') || state.startsWith('57P0') || state === '53300'
+  );
+}
+
+/**
+ * Whether a string `code` names a SQLite database that is busy, locked or cannot be opened.
+ *
+ * @param code - A driver's `code`.
+ * @returns True for `SQLITE_BUSY`, `SQLITE_LOCKED`, `SQLITE_CANTOPEN` and their extended codes.
+ */
+function isSqliteOutage(code: string): boolean {
+  return SQLITE_OUTAGE_PREFIXES.some((prefix) => code.startsWith(prefix));
+}
+
+/**
+ * Whether an error is a Redis client failing a command because it has no connection.
+ *
+ * These errors carry no errno or code, so they are recognised by their fixed
+ * message or class name.
+ *
+ * @param value - One error in the chain.
+ * @returns True for the offline errors of ioredis.
+ */
+function isRedisOffline(value: object): boolean {
+  let name: unknown;
+  let message: unknown;
+  try {
+    name = (value as Record<string, unknown>)['name'];
+    message = (value as Record<string, unknown>)['message'];
+  } catch {
+    return false;
+  }
+  return (
+    name === REDIS_RETRIES_EXHAUSTED ||
+    (typeof message === 'string' && REDIS_OFFLINE_MESSAGES.has(message))
   );
 }
 
@@ -56,11 +108,11 @@ function linkIsOutage(value: unknown): boolean {
     }
     if (
       typeof code === 'string' &&
-      (ERRNOS.has(code) || isConnectionSqlState(code))
+      (ERRNOS.has(code) || isConnectionSqlState(code) || isSqliteOutage(code))
     )
       return true;
   }
-  return false;
+  return isRedisOffline(value);
 }
 
 /**
