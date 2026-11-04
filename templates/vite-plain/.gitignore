@@ -1,0 +1,18 @@
+# dependencies
+node_modules/
+
+# environment: only the example file is committed
+.env
+.env.*
+!.env.example
+
+# build output
+dist/
+*.tsbuildinfo
+
+# tests
+coverage/
+playwright-report/
+test-results/
+
+.DS_Store
