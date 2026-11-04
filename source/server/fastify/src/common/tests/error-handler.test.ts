@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
 
+import { bounded } from '../concurrency/bounded.js';
 import { AppError, FAILURES } from '../errors/failures.js';
 import { buildServer } from '../../server.js';
 
@@ -23,6 +24,9 @@ describe('error handling', () => {
         cause: Object.assign(new Error('connect'), { code: 'ECONNREFUSED' }),
       });
     });
+    app.get('/api/v1/__hung', async () =>
+      bounded(new Promise<never>(() => undefined), 10, 'database'),
+    );
     app.get('/api/v1/__app-error', async () => {
       throw new AppError('forbidden');
     });
@@ -58,6 +62,13 @@ describe('error handling', () => {
 
   it('answers a dependency outage with 503', async () => {
     const response = await app.inject({ method: 'GET', url: '/api/v1/__down' });
+
+    expect(response.statusCode).toBe(503);
+    expect(response.body).toBe(failureBody(FAILURES.unavailable.message));
+  });
+
+  it('answers a bounded() timeout with 503', async () => {
+    const response = await app.inject({ method: 'GET', url: '/api/v1/__hung' });
 
     expect(response.statusCode).toBe(503);
     expect(response.body).toBe(failureBody(FAILURES.unavailable.message));

@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
 
 import { createTestApp } from '../../../test/create-app.js';
+import { bounded } from '../../concurrency/bounded.js';
 import { AppError } from '../../errors/app-error.js';
 import { FAILURES } from '../../errors/failures.js';
 import { paginated } from '../response.js';
@@ -27,6 +28,11 @@ class FaultController {
     throw new Error('query failed', {
       cause: Object.assign(new Error('connect'), { code: 'ECONNREFUSED' }),
     });
+  }
+
+  @Get('hung')
+  hung(): Promise<never> {
+    return bounded(new Promise<never>(() => undefined), 10, 'database');
   }
 
   @Get('app-error')
@@ -102,6 +108,16 @@ describe('error handling and envelope', () => {
     const response = await app.inject({
       method: 'GET',
       url: '/api/v1/__fault/down',
+    });
+
+    expect(response.statusCode).toBe(503);
+    expect(response.body).toBe(failureBody(FAILURES.unavailable.message));
+  });
+
+  it('answers a bounded() timeout with 503', async () => {
+    const response = await app.inject({
+      method: 'GET',
+      url: '/api/v1/__fault/hung',
     });
 
     expect(response.statusCode).toBe(503);
