@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 from alembic.config import Config
 
-from db.migrate import ROOT, run_migrate, run_status
+from db.migrate import AHEAD_WARNING, ROOT, migrate_main, run_migrate, run_status
 
 CREATE = """
 def upgrade() -> None:
@@ -29,6 +29,18 @@ REBUILD = """
 def upgrade() -> None:
     with op.batch_alter_table("parent") as batch:
         batch.alter_column("n", type_=sa.String())
+"""
+
+# Creates a table, then fails: a revision that breaks halfway.
+BROKEN = """
+def upgrade() -> None:
+    op.create_table("half", sa.Column("id", sa.String(), primary_key=True))
+    op.execute("INSERT INTO nowhere VALUES (1)")
+"""
+
+FIXED = """
+def upgrade() -> None:
+    op.create_table("half", sa.Column("id", sa.String(), primary_key=True))
 """
 
 ORPHAN = """
@@ -144,3 +156,62 @@ def test_status_creates_no_file_and_lists_every_revision_as_pending(
 
     assert "rev0" in out.getvalue()
     assert not database.exists()
+
+
+def _tables(database: Path) -> set[str]:
+    connection = sqlite3.connect(database)
+    try:
+        rows = connection.execute("select name from sqlite_master where type = 'table'").fetchall()
+    finally:
+        connection.close()
+    return {row[0] for row in rows}
+
+
+def test_a_revision_that_fails_halfway_leaves_nothing_and_a_corrected_rerun_succeeds(
+    database: Path, tmp_path: Path
+) -> None:
+    with pytest.raises(Exception, match="no such table: nowhere"):
+        _migrate(_config(tmp_path / "broken", [BROKEN]))
+
+    assert _tables(database) <= {"sqlite_sequence"}
+
+    assert "rev0" in _migrate(_config(tmp_path / "fixed", [FIXED]))
+    assert {"half", "alembic_version"} <= _tables(database)
+
+
+def _ahead(database: Path, tmp_path: Path) -> Config:
+    """A database that recorded rev0 and rev1, and a checkout that only has rev0."""
+    _migrate(_config(tmp_path / "newer", [CREATE, REBUILD]))
+    return _config(tmp_path / "older", [CREATE])
+
+
+def test_a_database_ahead_of_the_checkout_has_nothing_pending_and_migrate_applies_nothing(
+    database: Path, tmp_path: Path
+) -> None:
+    config = _ahead(database, tmp_path)
+    out = io.StringIO()
+
+    asyncio.run(run_status(out, config))
+    assert AHEAD_WARNING in out.getvalue()
+    assert "Pending" not in out.getvalue()
+    assert "No pending migrations." in out.getvalue()
+
+    out = io.StringIO()
+    asyncio.run(run_migrate(out, config))
+    assert AHEAD_WARNING in out.getvalue()
+    assert "Applying" not in out.getvalue()
+    assert "No pending migrations." in out.getvalue()
+
+
+def test_the_ahead_warning_names_no_host_user_or_path(database: Path, tmp_path: Path) -> None:
+    for word in (str(tmp_path), str(database), "sqlite"):
+        assert word not in AHEAD_WARNING
+
+
+def test_db_migrate_exits_zero_when_the_database_is_ahead(
+    database: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _ahead(database, tmp_path)
+    monkeypatch.setattr("db.migrate.alembic_config", lambda: _config(tmp_path / "older", [CREATE]))
+
+    assert migrate_main() == 0

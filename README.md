@@ -119,7 +119,7 @@ curl https://codeload.github.com/LiuAnBoy/project-templates/tar.gz/master | tar 
 
 Overlay 帶來資料庫的程式碼與規則頁、連線設定（`.env.example`）、需要服務時的 `docker-compose.dev.yml`，以及完整的 `package.json` 與鎖定檔（Node），或 `pyproject.toml` 與 `uv.lock`（FastAPI）。
 
-專案的啟動順序是：先安裝套件，再把 `.env.example` 複製成 `.env`，啟動服務，套用 migration，最後才啟動伺服器，因為伺服器缺少設定、服務或資料表時會拒絕啟動：
+專案的啟動順序是：先安裝套件，再把 `.env.example` 複製成 `.env`，啟動服務，套用 migration，最後才啟動伺服器。伺服器缺少設定或服務時會拒絕啟動；啟動檢查只確認資料庫連得上（`select 1`），不檢查資料表，所以還沒套用 migration 的伺服器照樣啟動、健康檢查回 200，查詢卻會失敗，因此 migration 要在啟動前先做：
 
 ```sh
 cp .env.example .env

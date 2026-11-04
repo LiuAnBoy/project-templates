@@ -16,9 +16,10 @@
 #      `down -v`. A taken port fails before anything starts.
 #   3. Store tests: `pnpm run test:integration` (Node) or `make test-integration`
 #      (Python), with `.env` in their environment.
-#   4. Lifecycle: add a throwaway table, generate a migration, status lists it,
-#      migrate prints it, status is empty, a second migrate is a no-op. Only when
-#      the project has `db:migrate` (Node) or a `db-migrate` target (Python).
+#   4. Lifecycle: add a throwaway table, generate a migration, the project's lint
+#      and format check pass over it, status lists it, migrate prints it, status
+#      is empty, a second migrate is a no-op. Only when the project has `db:migrate`
+#      (Node) or a `db-migrate` target (Python).
 #   5. Empty environment: the server exits non-zero and names every connection
 #      variable; then with HOST set to a sentinel and the settings still missing,
 #      the same, and the sentinel is not in the output.
@@ -371,13 +372,17 @@ write_probe_table() {
       cat >"$PROJ/$NODE_SCHEMA_DIR/check_probe.ts" <<'EOF'
 import { sqliteTable, text } from 'drizzle-orm/sqlite-core';
 
-export const checkProbe = sqliteTable('check_probe', { id: text('id').primaryKey() });
+export const checkProbe = sqliteTable('check_probe', {
+  id: text('id').primaryKey(),
+});
 EOF
     else
       cat >"$PROJ/$NODE_SCHEMA_DIR/check_probe.ts" <<'EOF'
 import { pgTable, text } from 'drizzle-orm/pg-core';
 
-export const checkProbe = pgTable('check_probe', { id: text('id').primaryKey() });
+export const checkProbe = pgTable('check_probe', {
+  id: text('id').primaryKey(),
+});
 EOF
     fi
     if [ -f "$PROJ/$NODE_SCHEMA_DIR/index.ts" ]; then
@@ -439,6 +444,11 @@ step4_lifecycle() {
     tag="$(sed -n "s/^revision[^=]*= *['\"]\\([^'\"]*\\)['\"].*/\\1/p" "$PROJ/$(echo "$created" | head -n 1)" | head -n 1)"
   fi
   [ -n "$tag" ] || { fail "could not read the new migration's tag" || return 1; }
+  lifecycle_run lint lint lint
+  [ "$LIFECYCLE_RC" -eq 0 ] || { fail "the generated migration fails the project's lint" || return 1; }
+  lifecycle_run format-check format:check format-check
+  [ "$LIFECYCLE_RC" -eq 0 ] || { fail "the generated migration fails the project's format check" || return 1; }
+  say "the generated migration passes lint and the format check"
   lifecycle_run status db:status db-status
   [ "$LIFECYCLE_RC" -eq 0 ] || { fail "status failed with a pending migration" || return 1; }
   echo "$OUT" | grep -Fq -- "$tag" || { fail "status does not list the pending migration $tag" || return 1; }

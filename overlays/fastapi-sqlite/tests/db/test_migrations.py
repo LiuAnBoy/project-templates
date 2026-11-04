@@ -46,7 +46,13 @@ def test_a_recorded_revision_the_checkout_lacks_is_ahead_of_disk(tmp_path: Path)
 
     assert ahead_of_disk(script, ("zzz",))
     assert not ahead_of_disk(script, ("a",))
-    assert [rev.id for rev in pending_revisions(script, ("zzz",))] == ["a"]
+
+
+def test_nothing_is_pending_when_the_database_is_ahead_of_the_checkout(tmp_path: Path) -> None:
+    script = _script(tmp_path, [("a", None), ("b", "a")])
+
+    assert pending_revisions(script, ("zzz",)) == []
+    assert pending_revisions(script, ("a", "zzz")) == []
 
 
 def test_several_heads_fail_naming_them(tmp_path: Path) -> None:

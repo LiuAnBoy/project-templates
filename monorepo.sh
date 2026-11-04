@@ -198,8 +198,8 @@ pt_data_steps() {
 }
 
 # pt_next_steps <project> <server> <dashboard-fw> <web-fw> <data>: print what to do next.
-# A server with a store refuses to start until its .env exists, its services run
-# and its database is migrated, so those steps come before the dev command.
+# A server with a store refuses to start until its .env exists and its services run;
+# its queries need the database migrated, so all three come before the dev command.
 pt_next_steps() {
   echo
   echo "Created $1."

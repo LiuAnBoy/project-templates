@@ -42,3 +42,6 @@ convention = "google"
 [tool.ruff.lint.per-file-ignores]
 "tests*/**" = ["D"]
 "**/__init__.py" = ["D104"]
+# A revision's docstring is the message the user passed, so its first line, its length
+# and its style are the user's to choose.
+"alembic/versions/**" = ["D", "E501"]

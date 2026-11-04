@@ -10,6 +10,7 @@ that serialises the writers of this process, and begins each transaction with
 ``BEGIN IMMEDIATE``, so a read-then-write cannot fail on a lock upgrade.
 """
 
+import logging
 from collections.abc import Awaitable, Callable
 from contextvars import ContextVar
 from dataclasses import dataclass
@@ -30,6 +31,11 @@ from sqlalchemy.ext.asyncio import (
 from sqlalchemy.pool import AsyncAdaptedQueuePool, NullPool
 
 from db.types import DatabasePort, MigrationError, TransactionRunner
+
+# aiosqlite logs every statement together with its bound values at DEBUG, and the
+# server routes the standard library's records into its own log. Pin it above DEBUG
+# so that no log line holds a bound value, whatever LOG_LEVEL says.
+logging.getLogger("aiosqlite").setLevel(logging.WARNING)
 
 #: True while a unit of work of ``transactions.run`` is running in this task.
 _INSIDE_RUN: ContextVar[bool] = ContextVar("sqlite_inside_run", default=False)
@@ -261,7 +267,11 @@ def create_migration_engine(settings: DatabaseSettings, *, create: bool) -> Asyn
     (Alembic's batch mode does, because SQLite cannot alter most columns in place)
     drops it, and with enforcement on the drop silently deletes the child rows that
     ``ON DELETE CASCADE`` points at. :func:`verify_migrated` takes the place of the
-    enforcement.
+    enforcement. Every transaction begins explicitly with ``BEGIN``, so the DDL of a
+    revision joins it: the driver's own handling leaves DDL outside any transaction,
+    and a revision that fails halfway would keep its tables and fail again on every
+    rerun. The pragma is set when the connection opens, before any ``BEGIN``, because
+    ``PRAGMA foreign_keys`` does nothing inside a transaction.
 
     Args:
         settings: The database settings.
@@ -280,10 +290,15 @@ def create_migration_engine(settings: DatabaseSettings, *, create: bool) -> Asyn
 
     @event.listens_for(engine.sync_engine, "connect")
     def set_pragmas(dbapi_connection: Any, _record: Any) -> None:
+        dbapi_connection.isolation_level = None
         cursor = dbapi_connection.cursor()
         cursor.execute("PRAGMA busy_timeout = 5000")
         cursor.execute("PRAGMA foreign_keys = OFF")
         cursor.close()
+
+    @event.listens_for(engine.sync_engine, "begin")
+    def begin(connection: Connection) -> None:
+        connection.exec_driver_sql("BEGIN")
 
     return engine
 

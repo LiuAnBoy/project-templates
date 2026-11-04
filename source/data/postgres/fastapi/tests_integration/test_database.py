@@ -1,14 +1,18 @@
 import asyncio
+import logging
 from collections.abc import Awaitable, Callable
 from types import SimpleNamespace
 
 import pytest
 from db_support import Probe, database_with_probe
 from local_target import require_local_url
+from loguru import logger
 from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.dependency import is_dependency_outage
 from core.failure import format_failure
+from core.logging import configure_logging
 from db.database import create_database
 from db.types import DatabasePort
 
@@ -125,3 +129,28 @@ def test_the_probe_and_the_runner_fail_once_the_database_is_closed() -> None:
         assert is_dependency_outage(raised.value)
 
     asyncio.run(run())
+
+
+def test_no_log_line_holds_a_bound_value_at_debug(capsys: pytest.CaptureFixture[str]) -> None:
+    root = logging.getLogger()
+    handlers, level = root.handlers[:], root.level
+    configure_logging("DEBUG")
+    sentinel = "SENTINEL-bound-value-4242"
+
+    async def body(database: DatabasePort, probe: Probe) -> None:
+        async def write(session: AsyncSession) -> None:
+            await probe.insert(session, sentinel)
+
+        await database.transactions.run(write)
+        async with database.session_factory() as session:
+            await session.execute(text("select cast(:v as text)"), {"v": sentinel})
+
+    try:
+        _scenario(body)
+    finally:
+        logger.remove()
+        root.handlers[:] = handlers
+        root.setLevel(level)
+
+    captured = capsys.readouterr()
+    assert sentinel not in captured.out + captured.err

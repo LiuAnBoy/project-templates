@@ -37,6 +37,12 @@ from db.types import MigrationError
 #: The project root, where ``alembic.ini`` lives.
 ROOT = Path(__file__).resolve().parents[2]
 
+#: What ``db-migrate`` and ``db-status`` print when the database is ahead of the checkout.
+AHEAD_WARNING = (
+    "Warning: the database recorded a migration this checkout does not contain. "
+    "An older release is being deployed over a newer one. Nothing is applied."
+)
+
 #: SQLSTATE classes of a database that cannot be reached or used: connection (08),
 #: invalid authorization (28), invalid catalog name (3D) and the server going away (57P0).
 _CONNECTION_STATES = ("08", "28", "3D", "57P0")
@@ -92,25 +98,6 @@ def revisions_on_disk(script: ScriptDirectory) -> list[Revision]:
     ]
 
 
-def pending_revisions(script: ScriptDirectory, current: Iterable[str]) -> list[Revision]:
-    """List the migrations the database has not recorded, in the order they apply.
-
-    Args:
-        script: The migration folder.
-        current: The revision ids the database records (``alembic_version``).
-
-    Returns:
-        The pending revisions, oldest first.
-    """
-    applied: set[str] = set()
-    for revision_id in current:
-        try:
-            applied.update(rev.revision for rev in script.iterate_revisions(revision_id, "base"))
-        except (CommandError, RevisionError):
-            continue  # recorded in the database, absent on disk: see ahead_of_disk
-    return [rev for rev in revisions_on_disk(script) if rev.id not in applied]
-
-
 def ahead_of_disk(script: ScriptDirectory, current: Iterable[str]) -> bool:
     """Tell whether the database recorded a migration this checkout does not contain.
 
@@ -127,6 +114,30 @@ def ahead_of_disk(script: ScriptDirectory, current: Iterable[str]) -> bool:
         except (CommandError, RevisionError):
             return True
     return False
+
+
+def pending_revisions(script: ScriptDirectory, current: Iterable[str]) -> list[Revision]:
+    """List the migrations the database has not recorded, in the order they apply.
+
+    A database that recorded a migration this checkout lacks is ahead of it, and
+    nothing is pending: Alembic cannot upgrade from a revision it cannot find, and
+    the newer release has already applied whatever this one carries.
+
+    Args:
+        script: The migration folder.
+        current: The revision ids the database records (``alembic_version``).
+
+    Returns:
+        The pending revisions, oldest first.
+    """
+    current = tuple(current)
+    revisions = revisions_on_disk(script)
+    if ahead_of_disk(script, current):
+        return []
+    applied: set[str] = set()
+    for revision_id in current:
+        applied.update(rev.revision for rev in script.iterate_revisions(revision_id, "base"))
+    return [rev for rev in revisions if rev.id not in applied]
 
 
 def _report(out: TextIO, heading: str, revisions: Sequence[Revision]) -> None:
@@ -214,10 +225,7 @@ async def run_migrate(out: TextIO | None = None, config: Config | None = None) -
         pending = pending_revisions(script, current)
         out.write(f"Migrations on disk: {total}, already applied: {total - len(pending)}\n")
         if ahead_of_disk(script, current):
-            out.write(
-                "Warning: the database recorded a migration this checkout does not contain. "
-                "An older release is being deployed over a newer one.\n"
-            )
+            out.write(f"{AHEAD_WARNING}\n")
         if not pending:
             out.write("No pending migrations.\n")
             await _verify(engine)
@@ -262,6 +270,8 @@ async def run_status(out: TextIO | None = None, config: Config | None = None) ->
             await engine.dispose()
     pending = pending_revisions(script, current)
     out.write(f"Migrations on disk: {total}, already applied: {total - len(pending)}\n")
+    if ahead_of_disk(script, current):
+        out.write(f"{AHEAD_WARNING}\n")
     if not pending:
         out.write("No pending migrations.\n")
         return

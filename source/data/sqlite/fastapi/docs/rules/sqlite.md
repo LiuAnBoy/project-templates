@@ -28,8 +28,10 @@ SQLite is accessed through SQLAlchemy 2 on `aiosqlite`, with Alembic for migrati
 - Alembic records the applied revision in `alembic_version`; the files in `alembic/versions/` list the revisions that exist. Nothing keeps its own list by hand.
 - `make db-migrate` is the only way the database changes. It applies only what is not recorded, does nothing when the database is up to date, and prints the counts, the names it applied and the record afterwards. A failure prints the statement and the cause; a failure to reach the file prints fixed text and a code, never a path.
 - `make db-migrate` runs with foreign keys off and runs `PRAGMA foreign_key_check` afterwards, also when nothing is pending, failing on any violation. A migration that rebuilds a parent table drops it, and with enforcement on the drop silently deletes the child rows that `ON DELETE CASCADE` points at. The check runs after the migration is applied, so a violation means fixing the data in a new migration.
+- Every migration runs in one transaction, DDL included, so a revision that fails halfway leaves nothing behind, not even its record, and a rerun after the fix applies it whole.
+- A database that recorded a revision this checkout does not contain is ahead of it (an older release deployed over a newer one). `make db-migrate` and `make db-status` print a warning, treat nothing as pending, and apply nothing.
 - `make db-status` lists the migrations that are still pending and never writes. A missing file means nothing is applied, and a project with no table yet has nothing pending. Several heads on disk fail it.
-- `make db-generate` compares the models with the database, so the database must be at head, and it creates the empty file when it is missing.
+- `make db-generate` compares the models with the database, so the database must be at head, and it creates the empty file when it is missing. The revision it writes passes `make lint` and `make format-check` for any message: its imports are sorted and it is formatted, and `alembic/versions/` is exempt from the docstring and line-length rules because the docstring is the message.
 - Run `make db-migrate` once per deploy, before the new code starts, while the server is stopped or idle.
 
 ### Branches and heads
