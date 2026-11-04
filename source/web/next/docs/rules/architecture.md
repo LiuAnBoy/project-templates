@@ -58,7 +58,7 @@ Why: a feature is deleted or moved as one folder, and a reader finds a thing by 
 - Route groups separate audiences, for example `(public)` and `(dashboard)`, each with its own `layout.tsx`. Why: a layout per audience carries its own chrome and gate without conditionals.
 - Default to server components. Add `'use client'` only to the file that needs state, effects, browser APIs or a client-only library, and keep that file small. Why: every client boundary ships its imports to the browser.
 - Providers are client components composed in `shared/providers/AppProviders.tsx` and mounted once in `app/layout.tsx`. Add a provider to `AppProviders`, never beside it.
-- React Query hooks from `modules/*/hooks` are client-only. A server component fetches through the same api function, or passes initial data to a client component.
+- React Query hooks from `modules/*/hooks` are client-only. A server component fetches through the same api function, because `shared/http/base-url.ts` resolves the base to an absolute URL on the server (`API_HOST`, default `http://localhost:8000`, plus `/api/v1`) and keeps it relative in the browser; or it passes initial data to a client component. Server-side calls do not carry the browser's token: pass what the call needs explicitly.
 - A file that must never reach the browser imports `server-only`; tests alias that import to an empty module.
 
 ### The API proxy
@@ -88,6 +88,6 @@ This template ships no authentication: no session, no sign-in page, no route gua
 
 1. Add an `auth` module that owns sign-in, session state and sign-out.
 2. At startup, register `setAuthTokenProvider` (reads the session) and `setUnauthorizedHandler` (sends the user to sign-in) from a client component mounted in `AppProviders`.
-3. Protect routes in the `layout.tsx` of a protected route group, or in `proxy.ts` (the file Next.js 16 calls to intercept requests), not in each page.
+3. Check the session in `proxy.ts` (the file Next.js 16 calls to intercept requests) and again at the data access, where the API call or query is made. A route group's `layout.tsx` handles chrome only: layouts do not re-render on every navigation, so a check there is not a guard.
 4. Keep the token out of `localStorage` when a cookie session can do the job.
 5. Update this page, `docs/README.md` and the rules that mention auth.

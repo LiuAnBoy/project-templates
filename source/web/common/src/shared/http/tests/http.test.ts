@@ -127,6 +127,15 @@ describe('http wrapper', () => {
     expect(getErrorMessage(error)).toBe('try again shortly');
   });
 
+  it('never follows an absolute path to another host', async () => {
+    const seen = mockTransport(() => ok(null));
+    await http.get('https://other.example/steal');
+    await http.get('//other.example/steal');
+    for (const config of seen) {
+      expect(httpClient.getUri(config)).toMatch(/^\/api\/v1\//);
+    }
+  });
+
   it('throws an HttpError when a 2xx body is not the envelope', async () => {
     mockTransport(() => ({ body: '<html></html>' }));
     await expect(http.get('/hello')).rejects.toBeInstanceOf(HttpError);

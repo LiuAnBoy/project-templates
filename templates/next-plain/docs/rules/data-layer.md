@@ -37,7 +37,9 @@ Both accept `null` to clear. This template ships no authentication, so nothing r
 
 ### Base URL
 
-The base is `/api/v1`, same-origin. In development the framework forwards it to port 8000 (see `architecture.md`); in production a reverse proxy does the same. If the API lives on another origin, read its address from an environment variable and keep the real host out of the code.
+The base comes from `src/shared/http/base-url.ts`, which each framework layer supplies. In the browser it is `/api/v1`, same-origin: in development the framework forwards it to port 8000 (see `architecture.md`), and in production a reverse proxy does the same. In Next.js server code it is `API_HOST` (default `http://localhost:8000`) plus `/api/v1`, because Node cannot resolve a relative URL; the Vite bundle always uses the relative base and never reads `process`. If the API lives on another origin, read its address from an environment variable and keep the real host out of the code.
+
+The instance sets `allowAbsoluteUrls: false`: a path that is absolute or protocol-relative is appended to the base, never followed, so the bearer token cannot be sent to another host. Pass paths only, never full URLs.
 
 ## Module api functions
 

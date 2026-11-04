@@ -19,10 +19,8 @@ import axios, {
   type AxiosResponse,
 } from 'axios';
 
+import { getApiBase } from './base-url';
 import { HttpError, NetworkError, TimeoutError } from './errors';
-
-/** The path every API route sits under. */
-export const API_BASE = '/api/v1';
 
 /** Timeout of a call that does not set its own. */
 const DEFAULT_TIMEOUT_MS = 15_000;
@@ -93,7 +91,10 @@ export function setUnauthorizedHandler(
  * its adapter); application code never imports it.
  */
 export const httpClient = axios.create({
-  baseURL: API_BASE,
+  baseURL: getApiBase(),
+  // A path that is absolute or protocol-relative is appended to the base, never
+  // followed, so the bearer token cannot be sent to another host.
+  allowAbsoluteUrls: false,
   timeout: DEFAULT_TIMEOUT_MS,
   headers: { Accept: 'application/json' },
   // Every status is handled in `send`, in one place.
@@ -101,6 +102,8 @@ export const httpClient = axios.create({
 });
 
 httpClient.interceptors.request.use(async (config) => {
+  // Resolved per request: on the Next.js server the base is an absolute URL.
+  config.baseURL = getApiBase();
   const token = await authTokenProvider?.();
   if (token) config.headers.set('Authorization', `Bearer ${token}`);
   return config;
@@ -266,7 +269,7 @@ async function send(
  * Build the axios config shared by every call.
  *
  * @param method HTTP method.
- * @param path Path relative to `API_BASE`.
+ * @param path Path relative to the API base (`/api/v1`).
  * @param options Per-call options.
  * @param extra Method-specific fields (params, data, responseType).
  * @returns The axios config.
@@ -290,7 +293,7 @@ function configOf(
  * Send a request with a body and return the answer's `payload.data`.
  *
  * @param method HTTP method.
- * @param path Path relative to `API_BASE`.
+ * @param path Path relative to the API base (`/api/v1`).
  * @param body A JSON object or `FormData`.
  * @param options Per-call options.
  * @returns `payload.data`, or `undefined` when the answer has none.
@@ -314,7 +317,7 @@ export const http = {
   /**
    * GET a route that answers one object.
    *
-   * @param path Path relative to `API_BASE`.
+   * @param path Path relative to the API base (`/api/v1`).
    * @param query Query parameters; empty values are dropped.
    * @param options Per-call options.
    * @returns `payload.data`.
@@ -333,7 +336,7 @@ export const http = {
   /**
    * GET one page of a list route.
    *
-   * @param path Path relative to `API_BASE`.
+   * @param path Path relative to the API base (`/api/v1`).
    * @param query Query parameters; empty values are dropped.
    * @param options Per-call options.
    * @returns The rows and the paging fields (`page_size` and `total_count` camel-cased).
@@ -373,7 +376,7 @@ export const http = {
    * empty. Reaching the page bound short of `totalCount` throws instead of
    * returning a partial list.
    *
-   * @param path Path relative to `API_BASE`.
+   * @param path Path relative to the API base (`/api/v1`).
    * @param query Query parameters; `page` and `page_size` are set here.
    * @param options Per-call options, applied to each page request.
    * @returns Every row.
@@ -404,7 +407,7 @@ export const http = {
   /**
    * GET a route that answers plain text; a failure is still the JSON failure envelope.
    *
-   * @param path Path relative to `API_BASE`.
+   * @param path Path relative to the API base (`/api/v1`).
    * @param query Query parameters; empty values are dropped.
    * @param options Per-call options.
    * @returns The response text.
@@ -428,7 +431,7 @@ export const http = {
   /**
    * POST a JSON object or `FormData`.
    *
-   * @param path Path relative to `API_BASE`.
+   * @param path Path relative to the API base (`/api/v1`).
    * @param body The request body.
    * @param options Per-call options.
    * @returns `payload.data`.
@@ -447,7 +450,7 @@ export const http = {
   /**
    * DELETE a resource.
    *
-   * @param path Path relative to `API_BASE`.
+   * @param path Path relative to the API base (`/api/v1`).
    * @param options Per-call options.
    * @returns `payload.data`, or `undefined` when the answer has none.
    */
