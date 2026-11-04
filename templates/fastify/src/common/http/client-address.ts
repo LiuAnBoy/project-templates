@@ -1,4 +1,5 @@
 import type { IncomingHttpHeaders } from 'node:http';
+import { isIP } from 'node:net';
 
 /**
  * Reads one header value, collapsing the repeated-header form to the first.
@@ -11,16 +12,19 @@ function headerValue(value: string | string[] | undefined): string | undefined {
 }
 
 /**
- * The client address a rate limit or a log line counts against.
+ * The client address an access log line names.
+ *
+ * For logs only, never for a decision: the headers are whatever the caller
+ * typed unless a reverse proxy overwrites them, so a forgeable address must not
+ * pick a rate-limit bucket (the limit counts `request.ip`). Only a value that
+ * parses as an IP address is returned; free text from a header never reaches a
+ * log, and a request with no usable header is `unknown`.
  *
  * Takes the headers rather than a framework request, so it does not name one
- * HTTP adapter. It is only correct behind a reverse proxy that overwrites
- * `x-forwarded-for` instead of forwarding what the client sent; with no proxy
- * the header is whatever the caller typed. `unknown` is a real bucket: a request
- * with neither header still has to be counted.
+ * HTTP adapter.
  *
  * @param request - Anything carrying the incoming headers.
- * @returns The first forwarded address, the real-ip header, or `unknown`.
+ * @returns The first forwarded address or the real-ip header when it is an IP address, otherwise `unknown`.
  */
 export function getClientAddress(request: {
   headers: IncomingHttpHeaders;
@@ -28,7 +32,7 @@ export function getClientAddress(request: {
   const forwarded = headerValue(request.headers['x-forwarded-for'])
     ?.split(',')[0]
     ?.trim();
-  return (
-    forwarded || headerValue(request.headers['x-real-ip'])?.trim() || 'unknown'
-  );
+  const candidate =
+    forwarded || headerValue(request.headers['x-real-ip'])?.trim() || '';
+  return isIP(candidate) !== 0 ? candidate : 'unknown';
 }

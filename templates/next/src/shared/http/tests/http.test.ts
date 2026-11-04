@@ -5,9 +5,11 @@ import {
   isCancel,
   type InternalAxiosRequestConfig,
 } from 'axios';
+import util from 'node:util';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  AuthTokenError,
   HttpError,
   NetworkError,
   TimeoutError,
@@ -200,5 +202,60 @@ describe('http wrapper', () => {
     setAuthTokenProvider(() => undefined);
     await http.get('/me');
     expect(seen[1].headers.has('Authorization')).toBe(false);
+  });
+
+  it('keeps no request headers in the cause of a network failure', async () => {
+    httpClient.defaults.adapter = async (config) => {
+      throw new AxiosError('Network Error', AxiosError.ERR_NETWORK, config, {
+        _header: 'Authorization: Bearer secret-token',
+      });
+    };
+    setAuthTokenProvider(() => 'secret-token');
+    const error = (await http.get('/hello').catch((e: unknown) => e)) as Error;
+    expect(error).toBeInstanceOf(NetworkError);
+    expect(error.cause).toMatchObject({
+      code: AxiosError.ERR_NETWORK,
+      url: '/hello',
+    });
+    expect(
+      JSON.stringify(error.cause, Object.getOwnPropertyNames(error.cause)),
+    ).not.toContain('secret-token');
+    expect(util.inspect(error, { depth: 10 })).not.toContain('secret-token');
+  });
+
+  it('surfaces a rejecting token provider as AuthTokenError, not NetworkError', async () => {
+    const seen = mockTransport(() => ok(null));
+    const failure = new Error('session store down');
+    setAuthTokenProvider(() => Promise.reject(failure));
+    const error = await http.get('/me').catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(AuthTokenError);
+    expect(error).not.toBeInstanceOf(NetworkError);
+    expect((error as Error).cause).toBe(failure);
+    expect(seen).toHaveLength(0);
+  });
+
+  it('still rejects with the HttpError when the 401 handler throws', async () => {
+    mockTransport(() => ({
+      status: 401,
+      body: { success: false, payload: { message: 'sign in first' } },
+    }));
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    setUnauthorizedHandler(() => {
+      throw new Error('redirect failed');
+    });
+    const error = await http.get('/me').catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(HttpError);
+    expect((error as HttpError).message).toBe('sign in first');
+  });
+
+  it('lets a per-call Authorization header win and skips the provider', async () => {
+    const seen = mockTransport(() => ok(null));
+    const provider = vi.fn(() => 'process-wide');
+    setAuthTokenProvider(provider);
+    await http.get('/me', undefined, {
+      headers: { Authorization: 'Bearer this-user' },
+    });
+    expect(seen[0].headers.get('Authorization')).toBe('Bearer this-user');
+    expect(provider).not.toHaveBeenCalled();
   });
 });

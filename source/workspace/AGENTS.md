@@ -4,9 +4,9 @@ This is the root of a pnpm workspace. It holds the `contract` package (the wire 
 
 ## Always-rules
 
-- The wire shape of a route lives once, as a zod schema in `contract/src/`. The server validates with it and the web parses with it; neither side declares its own copy.
+- The wire shape of a route lives once, as a zod schema in `contract/src/`. The server validates with it and the web parses with it; neither side declares its own copy. The shipped `hello` route is the one exception: a standalone server has no contract package, so `server/` keeps its own `hello` schema. A new route in a composed project declares its shape in `contract/`, never beside its handler.
 - `contract` holds schemas and the types inferred from them, and nothing else: no business computation, no framework code, no database access.
-- Every wire key is snake_case. Code stays camelCase and converts at the boundary.
+- Every wire key is snake_case. In the server, code stays camelCase and converts at the boundary; the web keeps items in their wire shape.
 - `contract` builds to `dist/` and is consumed as built JavaScript. After changing it, run `pnpm --filter @app/contract run build` (`pnpm install` does this too) before running the web or the server against it.
 - Root `docs/` holds product rules and records. Implementation rules and records live in the part that owns the code (`web/docs/`, `dashboard/docs/`, `server/docs/`); never copy them up here.
 - Never commit `.env` or any secret.

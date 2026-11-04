@@ -596,7 +596,8 @@ export async function loadRegistry(deps, getJson = httpJson) {
  * Read the advisories of the versions that matter for each package.
  *
  * npm answers the bulk endpoint with advisories per package but not per
- * version, so each request carries one version per package.
+ * version, so each request carries one version per package; a package that
+ * needs several versions checked spreads them over several requests.
  *
  * @param {Dep[]} deps Exactly pinned dependencies.
  * @param {Registry} registry Registry data.
@@ -611,10 +612,18 @@ export async function loadAdvisories(deps, registry, now, getJson = httpJson) {
     .filter((d) => registry[key(d)])
     .map((d) => ({ dep: d, versions: versionsToCheck(d, registry, now) }));
 
-  const npmRounds = [];
+  // A package pinned at several versions needs one round per version, so every
+  // name and version pair is queried and none overwrites another.
+  const npmVersions = new Map();
   for (const { dep, versions } of wanted.filter((w) => w.dep.ecosystem === 'npm')) {
-    versions.forEach((v, i) => {
-      (npmRounds[i] ??= {})[dep.name] = v;
+    const set = npmVersions.get(dep.name) ?? new Set();
+    for (const v of versions) set.add(v);
+    npmVersions.set(dep.name, set);
+  }
+  const npmRounds = [];
+  for (const [name, set] of npmVersions) {
+    [...set].forEach((v, i) => {
+      (npmRounds[i] ??= {})[name] = v;
     });
   }
   for (const round of npmRounds) {

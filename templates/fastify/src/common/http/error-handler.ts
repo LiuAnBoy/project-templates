@@ -13,25 +13,9 @@ import {
 import { AppError } from '../errors/app-error.js';
 import { isDependencyOutage } from '../errors/dependency-failure.js';
 import { describeFailure } from '../errors/failure.js';
+import { frameworkStatus } from '../errors/framework-status.js';
 import { FAILURES, failureForStatus } from '../errors/failures.js';
 import { failure } from './envelope.js';
-
-/**
- * Reads the HTTP status a framework attached to an error.
- *
- * Fastify's own errors (an oversized body, an unsupported media type) carry a
- * 4xx `statusCode`.
- *
- * @param error - Whatever was thrown.
- * @returns The status, when it is a 4xx or 5xx.
- */
-function frameworkStatus(error: unknown): number | undefined {
-  if (typeof error !== 'object' || error === null) return undefined;
-  const status = (error as { statusCode?: unknown }).statusCode;
-  return typeof status === 'number' && status >= 400 && status <= 599
-    ? status
-    : undefined;
-}
 
 /**
  * Sends a failure envelope.
@@ -58,7 +42,7 @@ function send(
  * 1. a request that failed zod validation: 400, the issues go to the debug log;
  * 2. an `AppError`: its own status and message;
  * 3. a response that failed its own schema: our bug, 500;
- * 4. an error a framework raised (4xx or 5xx `statusCode`): the table message
+ * 4. an error Fastify raised (`FST_ERR_` code with a 4xx or 5xx `statusCode`): the table message
  *    for that status, and a 5xx is logged;
  * 5. a dependency outage (unreachable database, timeout): 503;
  * 6. anything else: logged with its whole cause chain, answered with the fixed 500.

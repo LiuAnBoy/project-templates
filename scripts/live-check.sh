@@ -22,6 +22,9 @@
 #   GET /api/v1/hello       200 and exactly the hello body
 #   GET /api/health         200 and exactly {"status":"ok"} (outside the envelope)
 #   GET an unknown route    404, "success": false, string payload.message
+# A Node server is then started once more with a temporary .env holding
+# TRUST_PROXY=loopback and RATE_LIMIT_MAX=1, and must count two loopback requests
+# with different x-forwarded-for values as two clients.
 # The check refuses to run when the port is already taken. Everything started
 # is killed on exit. Only package installation touches the network.
 # Environment: LIVE_PORT (default 8000), LIVE_TIMEOUT seconds (default 90).
@@ -199,6 +202,35 @@ run_server() {
   return "$rc"
 }
 
+# assert_env_file: a Node server must read `.env` before it builds its HTTP
+# adapter. The temporary `.env` trusts loopback and allows one request per
+# client, so two requests from loopback with different `x-forwarded-for` values
+# both answer 200 only when TRUST_PROXY reached the adapter, and a repeat of the
+# first answers 429 only when RATE_LIMIT_MAX did too.
+assert_env_file() {
+  if port_busy; then
+    echo "FAIL port $PORT is already in use; refusing to assert against a foreign process" >&2
+    return 1
+  fi
+  printf 'TRUST_PROXY=loopback\nRATE_LIMIT_MAX=1\n' >"$TMP/.env"
+  start_server pnpm run start
+  wait_ready || return 1
+  rc=0
+  first="$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 -H 'x-forwarded-for: 203.0.113.1' "http://localhost:$PORT/api/v1/hello")"
+  second="$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 -H 'x-forwarded-for: 203.0.113.2' "http://localhost:$PORT/api/v1/hello")"
+  repeat="$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 -H 'x-forwarded-for: 203.0.113.1' "http://localhost:$PORT/api/v1/hello")"
+  if [ "$first" != 200 ] || [ "$second" != 200 ] || [ "$repeat" != 429 ]; then
+    echo "FAIL .env: TRUST_PROXY and RATE_LIMIT_MAX from .env did not reach the server" >&2
+    echo "expected 200, 200, 429 for two forwarded clients and a repeat; got $first, $second, $repeat" >&2
+    rc=1
+  else
+    echo "ok   .env reaches the HTTP adapter (TRUST_PROXY) and the limit (RATE_LIMIT_MAX)"
+  fi
+  stop_server
+  rm -f "$TMP/.env"
+  return "$rc"
+}
+
 # check_contract: workspace flow.
 check_contract() {
   step "pnpm install --frozen-lockfile" pnpm install --frozen-lockfile || return 1
@@ -258,6 +290,7 @@ check_one() {
         step "pnpm run build" pnpm run build || rc=1
       fi
       [ "$rc" -eq 0 ] && { run_server pnpm run start || rc=1; }
+      [ "$rc" -eq 0 ] && { assert_env_file || rc=1; }
       ;;
     python-server)
       step "uv sync --frozen" uv sync --frozen || rc=1

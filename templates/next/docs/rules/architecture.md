@@ -42,7 +42,7 @@ Why: a feature is deleted or moved as one folder, and a reader finds a thing by 
 
 - A route file reads params, renders one module component and nothing else. Logic found in a route moves to the module.
 - A component used by two features moves to `shared/components/`. A component used by one stays in its module even if it looks generic.
-- Feature-specific constants and types live in the module. A type shared with the backend comes from the `@app/contract` package (monorepo) or generated API types, not a hand copy.
+- Feature-specific constants and types live in the module. A type shared with the backend comes from the `@app/contract` package where it exists (a monorepo with a Node server), otherwise from generated API types, not a hand copy.
 - A shared component takes data and callbacks as props and calls no module hook.
 
 ## Files and naming
@@ -59,7 +59,7 @@ Why: a feature is deleted or moved as one folder, and a reader finds a thing by 
 - Route groups separate audiences, for example `(web)` and `(dashboard)`, each with its own `layout.tsx`. Why: a layout per audience carries its own chrome (header, navigation) without conditionals. A layout is chrome only; it never decides who may see a page.
 - Default to server components. Add `'use client'` only to the file that needs state, effects, browser APIs or a client-only library, and keep that file small. Why: every client boundary ships its imports to the browser.
 - Providers are client components composed in `shared/providers/AppProviders.tsx` and mounted once in `app/layout.tsx`. Add a provider to `AppProviders`, never beside it.
-- React Query hooks from `modules/*/hooks` are client-only. A server component fetches through the same api function, because `shared/http/base-url.ts` resolves the base to an absolute URL on the server (`API_HOST`, default `http://localhost:8000`, plus `/api/v1`) and keeps it relative in the browser; or it passes initial data to a client component. Server-side calls do not carry the browser's token: pass what the call needs explicitly.
+- React Query hooks from `modules/*/hooks` are client-only. A server component fetches through the same api function, because `shared/http/base-url.ts` resolves the base to an absolute URL on the server (`API_HOST`, default `http://localhost:8000`, plus `/api/v1`) and keeps it relative in the browser; or it passes initial data to a client component. Server-side calls do not carry the browser's token, and no token provider is ever registered on a server, because one process serves every user: pass the current user's credential on each call as `options.headers`, for example `{ Authorization: ... }`.
 - A file that must never reach the browser imports `server-only`; tests alias that import to an empty module.
 
 ### Error and not-found pages

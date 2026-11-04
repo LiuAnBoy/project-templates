@@ -3,10 +3,13 @@
 import re
 import time
 import uuid
+from ipaddress import ip_address
 
 from loguru import logger
 from starlette.datastructures import Headers, MutableHeaders
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
+
+from core.handlers import unhandled_failure
 
 #: What the access log writes in place of a path no route matched.
 UNMATCHED_ROUTE = "<unmatched>"
@@ -29,19 +32,27 @@ def resolve_request_id(candidate: str | None) -> str:
 
 
 def client_address(headers: Headers) -> str:
-    """Read the client address a rate limit or a log line counts against.
+    """Read the client address a log line names.
 
-    Only correct behind a reverse proxy that overwrites ``x-forwarded-for``
-    instead of forwarding what the client sent. ``unknown`` is a real bucket.
+    For logs only, never for a decision: the headers are whatever the caller typed
+    unless a reverse proxy overwrites them, so a forgeable address must not pick a
+    rate-limit bucket (``core.rate_limit.client_key`` decides that). Only a value
+    that parses as an IP address is returned; anything else becomes ``unknown``, so
+    free text from a header never reaches the log.
 
     Args:
         headers: The request headers.
 
     Returns:
-        The first forwarded address, the real-ip header, or ``unknown``.
+        The first forwarded address or the real-ip header when it is an IP address,
+        otherwise ``unknown``.
     """
     forwarded = (headers.get("x-forwarded-for") or "").split(",")[0].strip()
-    return forwarded or (headers.get("x-real-ip") or "").strip() or "unknown"
+    candidate = forwarded or (headers.get("x-real-ip") or "").strip()
+    try:
+        return str(ip_address(candidate))
+    except ValueError:
+        return "unknown"
 
 
 def route_pattern(scope: Scope) -> str:
@@ -105,16 +116,24 @@ class RequestContextMiddleware:
         scope.setdefault("state", {})["request_id"] = request_id
         started = time.perf_counter()
         status = 500
+        responded = False
 
         async def send_with_id(message: Message) -> None:
-            nonlocal status
+            nonlocal status, responded
             if message["type"] == "http.response.start":
                 status = message["status"]
+                responded = True
                 MutableHeaders(scope=message)["x-request-id"] = request_id
             await send(message)
 
         try:
             await self.app(scope, receive, send_with_id)
+        except Exception as exc:
+            # The server's last-resort handler answers outside this middleware, so
+            # the status it will send is decided here by the same rule.
+            if not responded:
+                status = unhandled_failure(exc)[0]
+            raise
         finally:
             logger.info(
                 "request completed method={method} route={route} status={status} "

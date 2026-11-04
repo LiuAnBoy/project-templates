@@ -31,7 +31,7 @@ NestJS 11（Fastify adapter）、TypeScript 6、zod 4（nestjs-zod）、nestjs-p
 
 ## 環境變數
 
-啟動時只讀一次並驗證，位置在 `src/config/env.ts`。沒有 `.env` 也能啟動；`.env.example` 只放假的範例值。
+啟動時只讀一次並驗證，位置在 `src/config/env.ts`。沒有 `.env` 也能啟動；`.env.example` 只放假的範例值。`pnpm dev` 與 `pnpm start` 由 Node 在伺服器建立之前載入 `.env`。
 
 | 變數                        | 預設值        | 說明                                                                         |
 | --------------------------- | ------------- | ---------------------------------------------------------------------------- |

@@ -1,7 +1,7 @@
 /**
  * The only door to the API. This is the one file that imports `axios`; every
  * call returns the answer's data, never the axios response, and every failure
- * is thrown as an `HttpError`, `NetworkError` or `TimeoutError`, except a
+ * is thrown as an `HttpError`, `NetworkError`, `TimeoutError` or `AuthTokenError`, except a
  * cancellation, which is rethrown unchanged.
  *
  * The API answers one envelope:
@@ -20,7 +20,12 @@ import axios, {
 } from 'axios';
 
 import { getApiBase } from './base-url';
-import { HttpError, NetworkError, TimeoutError } from './errors';
+import {
+  AuthTokenError,
+  HttpError,
+  NetworkError,
+  TimeoutError,
+} from './errors';
 
 /** Timeout of a call that does not set its own. */
 const DEFAULT_TIMEOUT_MS = 15_000;
@@ -41,6 +46,12 @@ export interface RequestOptions {
   signal?: AbortSignal;
   /** Overrides the 15 s default for this call. */
   timeoutMs?: number;
+  /**
+   * Extra request headers for this call. An `Authorization` header set here
+   * wins over the token provider, which is then not asked. This is how server
+   * code passes the current user's credential, call by call.
+   */
+  headers?: Record<string, string>;
 }
 
 /** One page of a list route. */
@@ -76,7 +87,8 @@ export function setAuthTokenProvider(provider: AuthTokenProvider | null): void {
 
 /**
  * Register the reaction to a 401 answer (for example a redirect to sign-in).
- * The handler runs before the call rejects with the `HttpError`.
+ * The handler runs before the call rejects with the `HttpError`; if it throws,
+ * the error is logged and the call still rejects with the `HttpError`.
  *
  * @param handler The reaction, or `null` to clear it.
  */
@@ -104,7 +116,13 @@ export const httpClient = axios.create({
 httpClient.interceptors.request.use(async (config) => {
   // Resolved per request: on the Next.js server the base is an absolute URL.
   config.baseURL = getApiBase();
-  const token = await authTokenProvider?.();
+  if (config.headers.has('Authorization')) return config;
+  let token: string | null | undefined;
+  try {
+    token = await authTokenProvider?.();
+  } catch (error) {
+    throw new AuthTokenError(error);
+  }
   if (token) config.headers.set('Authorization', `Bearer ${token}`);
   return config;
 });
@@ -177,19 +195,39 @@ function retryAfterOf(response: AxiosResponse): number | null {
 }
 
 /**
+ * Copy what debugging needs from an axios error, without the request: its
+ * config and request object hold the `Authorization` header, so the error
+ * itself must not stay in the cause chain.
+ *
+ * @param error What axios rejected with.
+ * @returns A plain error with the message, code, method and URL, or the value itself when it is not an axios error.
+ */
+function scrub(error: unknown): unknown {
+  if (!axios.isAxiosError(error)) return error;
+  const copy = new Error(error.message);
+  copy.name = error.name;
+  return Object.assign(copy, {
+    code: error.code,
+    method: error.config?.method,
+    url: error.config?.url,
+  });
+}
+
+/**
  * Turn a transport failure into the wrapper's error types.
  *
  * @param error What axios rejected with.
- * @returns A `TimeoutError` for a timeout, else a `NetworkError`.
+ * @returns A `TimeoutError` for a timeout, else a `NetworkError`; the cause is the scrubbed copy.
  */
 function transportError(error: unknown): NetworkError {
+  const cause = scrub(error);
   if (
     axios.isAxiosError(error) &&
     (error.code === 'ECONNABORTED' || error.code === 'ETIMEDOUT')
   ) {
-    return new TimeoutError(error);
+    return new TimeoutError(cause);
   }
-  return new NetworkError('Network request failed', error);
+  return new NetworkError('Network request failed', cause);
 }
 
 /**
@@ -227,6 +265,7 @@ function failureOf(
  * @throws {HttpError} A non-2xx answer or a body that is not the envelope.
  * @throws {TimeoutError} No answer within the timeout.
  * @throws {NetworkError} No answer at all.
+ * @throws {AuthTokenError} The token provider failed; nothing was sent.
  */
 async function send(
   config: AxiosRequestConfig,
@@ -237,7 +276,7 @@ async function send(
     response = await httpClient.request(config);
   } catch (error) {
     // A cancellation is something the caller asked for, not a failure to report.
-    if (isCancel(error)) throw error;
+    if (isCancel(error) || error instanceof AuthTokenError) throw error;
     throw transportError(error);
   }
 
@@ -249,7 +288,12 @@ async function send(
       `Request failed with status ${response.status}`,
     );
     if (response.status === 401) {
-      unauthorizedHandler?.({ status: 401, error });
+      try {
+        unauthorizedHandler?.({ status: 401, error });
+      } catch (handlerError) {
+        // A failing reaction must not hide the answer the caller is owed.
+        console.error('The 401 handler threw', handlerError);
+      }
     }
     throw error;
   }
@@ -286,6 +330,7 @@ function configOf(
     url: path,
     signal: options?.signal,
     timeout: options?.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+    headers: options?.headers,
   };
 }
 

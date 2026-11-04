@@ -15,14 +15,15 @@ Server state goes through React Query, over module api functions, over one HTTP 
 | `http.post<T>(path, body?, options?)`, `put`, `patch` | A JSON object or `FormData`.                                                                             |
 | `http.delete<T>(path, options?)`                      | Delete a resource.                                                                                       |
 
-- `query` drops `undefined` and `null` values before sending. `options` is `{ signal?, timeoutMs? }`: pass an `AbortSignal` to cancel, and `timeoutMs` to override the 15 s default for one call.
+- `query` drops `undefined` and `null` values before sending. `options` is `{ signal?, timeoutMs?, headers? }`: pass an `AbortSignal` to cancel, `timeoutMs` to override the 15 s default for one call, and `headers` to add request headers for one call (an `Authorization` header set there wins over the token provider).
 - Never use raw `fetch`, and never import `axios` outside the wrapper. Why: the token, the error shape and the 401 reaction live in one place.
 - The API answers one envelope. Success is `{"success": true, "payload": {"data": ...}}`; a list adds `page`, `page_size` and `total_count` beside `data`; a write may answer `{"success": true}` alone, and its call resolves to `undefined`. Failure is `{"success": false, "payload": {"message": "..."}}` with the HTTP status carrying the kind. The wrapper unwraps the envelope, so api functions never see it.
 
 ### Errors
 
 - A non-2xx answer, or a 2xx body that is not the envelope, throws `HttpError` with `status`, `message` (the server's `payload.message`), `requestId` (the `x-request-id` header), `retryAfter` (seconds, from `Retry-After`) and the raw `body`.
-- No answer throws `NetworkError`. No answer within the timeout throws `TimeoutError`, a subclass of `NetworkError`, so one `instanceof NetworkError` covers both and `instanceof TimeoutError` tells them apart.
+- No answer throws `NetworkError`. No answer within the timeout throws `TimeoutError`, a subclass of `NetworkError`, so one `instanceof NetworkError` covers both and `instanceof TimeoutError` tells them apart. Their `cause` is a plain copy holding the message, code, method and URL, never the request or its headers, so a logger that walks `cause` cannot print the bearer token.
+- A token provider that rejects throws `AuthTokenError` with the provider's failure as `cause`; nothing is sent, and it is not a network failure.
 - A cancelled request (aborted `signal`) rejects with axios's `CanceledError`, untouched. Check it with `isCancel` from axios inside the code that cancelled; do not report it as a failure.
 - `getErrorMessage(error, fallback?)` returns the text to show: the server's message for an `HttpError`, a fixed text for a transport failure, the fallback otherwise. The UI shows it as is; the server owns user-facing wording.
 - An error nobody handles reaches the framework's error page (`architecture.md`), which shows the fixed text of `ErrorState` and logs the error with `console.error`. Never show an error's message, stack or digest there. An unknown address shows the not-found page, which is `ErrorState` with `kind="not-found"`.
@@ -31,10 +32,10 @@ Server state goes through React Query, over module api functions, over one HTTP 
 
 `shared/` never imports `modules/`, so a feature registers its behaviour at startup through two setters on the wrapper:
 
-- `setAuthTokenProvider(provider)`: the provider returns the bearer token, or a promise of it while a session loads. Each request sends `Authorization: Bearer <token>` when the provider answers one.
-- `setUnauthorizedHandler(handler)`: runs when the API answers 401, before the call rejects. Use it to send the user to sign-in.
+- `setAuthTokenProvider(provider)`: the provider returns the bearer token, or a promise of it while a session loads. Each request sends `Authorization: Bearer <token>` when the provider answers one, unless the call already carries its own `Authorization` header.
+- `setUnauthorizedHandler(handler)`: runs when the API answers 401, before the call rejects. Use it to send the user to sign-in. If the handler throws, the error is logged and the call still rejects with the `HttpError`.
 
-Both accept `null` to clear. This template ships no authentication, so nothing registers them yet; see "Adding authentication" in `architecture.md`.
+Both accept `null` to clear. The provider is process-wide, so it belongs to the browser, where one process is one user. Code that runs on a server never registers one: a single provider would serve every user's request from the same process and could send one user's token on another's call. Server code passes the current user's credential on each call through `options.headers`. This template ships no authentication, so nothing registers them yet; see "Authentication is not included" in `architecture.md`.
 
 ### Base URL
 
@@ -87,7 +88,7 @@ Everything that came from the server and can be refetched is a query, never a co
 
 ## Forms
 
-Validate with the same zod schema the backend uses when the `@app/contract` package is present (it is, in a monorepo); otherwise keep one schema per form beside the component. Submit through a mutation hook and show the server's `message` through `getErrorMessage`.
+Where the `@app/contract` package exists (a monorepo with a Node server), validate with the same zod schema the backend uses. Where it does not (a standalone template, or a monorepo with a FastAPI server), keep one schema per form beside the component. Submit through a mutation hook and show the server's `message` through `getErrorMessage`.
 
 ## Dates
 

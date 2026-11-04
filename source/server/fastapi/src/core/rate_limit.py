@@ -81,6 +81,9 @@ def parse_trusted_proxies(raw: str) -> tuple[Network, ...]:
 def _is_trusted(address: str, trusted: Collection[Network]) -> bool:
     """Tell whether an address belongs to a trusted proxy.
 
+    An IPv4-mapped IPv6 address is judged as the IPv4 address it wraps, because a
+    server listening on ``::`` sees an IPv4 proxy that way.
+
     Args:
         address: A peer or forwarded address; not necessarily valid.
         trusted: The trusted networks.
@@ -92,6 +95,8 @@ def _is_trusted(address: str, trusted: Collection[Network]) -> bool:
         parsed = ip_address(address)
     except ValueError:
         return False
+    if isinstance(parsed, IPv6Address) and parsed.ipv4_mapped is not None:
+        parsed = parsed.ipv4_mapped
     return any(parsed.version == network.version and parsed in network for network in trusted)
 
 

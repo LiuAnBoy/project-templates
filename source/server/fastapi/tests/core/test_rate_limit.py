@@ -100,6 +100,16 @@ def test_trust_proxy_reads_addresses_ranges_and_named_ranges() -> None:
     assert len(parse_trusted_proxies("10.0.0.1, 192.168.0.0/16, loopback")) == 4
 
 
+def test_an_ipv4_proxy_seen_as_a_mapped_address_is_still_trusted() -> None:
+    trusted = parse_trusted_proxies("10.1.1.1")
+    scope = {
+        "client": ("::ffff:10.1.1.1", 1),
+        "headers": [(b"x-forwarded-for", b"1.1.1.1")],
+    }
+
+    assert client_key(scope, trusted) == "1.1.1.1"
+
+
 def test_addresses_of_one_ipv6_network_share_a_bucket_and_a_mapped_ipv4_is_ipv4() -> None:
     def key(address: str) -> str:
         return client_key({"client": (address, 1), "headers": []}, ())

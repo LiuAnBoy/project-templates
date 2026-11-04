@@ -11,6 +11,7 @@ import { ZodValidationException } from 'nestjs-zod';
 import { AppError } from '../../errors/app-error.js';
 import { isDependencyOutage } from '../../errors/dependency-failure.js';
 import { describeFailure } from '../../errors/failure.js';
+import { frameworkStatus } from '../../errors/framework-status.js';
 import { FAILURES, failureForStatus } from '../../errors/failures.js';
 import { routePattern } from '../access-log.js';
 
@@ -19,21 +20,6 @@ type ErrorBody = { success: false; payload: { message: string } };
 
 /** What the request can tell us about where a failure happened. */
 type Origin = { route?: string; requestId?: string };
-
-/**
- * Reads the HTTP status a framework attached to an error that is not an
- * `HttpException`, such as Fastify's own refusal of an oversized body.
- *
- * @param error - Whatever was thrown.
- * @returns The status, when it is a 4xx or 5xx.
- */
-function frameworkStatus(error: unknown): number | undefined {
-  if (typeof error !== 'object' || error === null) return undefined;
-  const status = (error as { statusCode?: unknown }).statusCode;
-  return typeof status === 'number' && status >= 400 && status <= 599
-    ? status
-    : undefined;
-}
 
 /**
  * The single place that turns a thrown error into a response body.

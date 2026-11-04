@@ -93,6 +93,21 @@ async def http_exception_handler(request: Request, exc: Exception) -> JSONRespon
     return _answer(request, status, message, {"Allow": allow} if allow else None)
 
 
+def unhandled_failure(exc: Exception) -> tuple[int, str]:
+    """Decide what an unexpected error is answered with.
+
+    The one place the decision is made: the handler below answers it, and the
+    access log records the same status for a request that ends in it.
+
+    Args:
+        exc: Whatever was raised.
+
+    Returns:
+        The ``(status, message)`` entry: 503 for a dependency outage, otherwise the fixed 500.
+    """
+    return FAILURES["unavailable"] if is_dependency_outage(exc) else FAILURES["internal"]
+
+
 async def unhandled_handler(request: Request, exc: Exception) -> JSONResponse:
     """Answer anything unexpected: 503 for a dependency outage, otherwise the fixed 500.
 
@@ -105,12 +120,11 @@ async def unhandled_handler(request: Request, exc: Exception) -> JSONResponse:
     Returns:
         The failure answer.
     """
-    if is_dependency_outage(exc):
+    status, message = unhandled_failure(exc)
+    if status == FAILURES["unavailable"][0]:
         logger.opt(exception=exc).error("dependency unreachable")
-        status, message = FAILURES["unavailable"]
     else:
         logger.opt(exception=exc).error("unhandled error")
-        status, message = FAILURES["internal"]
     return _answer(request, status, message)
 
 

@@ -111,7 +111,7 @@ message 只含固定文字，或伺服器自己定義的名稱；message 不含�
 - client 以連線的來源位址計算。`x-forwarded-for` 預設不採信，因為沒有代理時它是呼叫者自己填的字串，會讓人繞過限制；只有來自 `TRUST_PROXY` 所列位址的連線，才採信它。`true`、`*`、`0.0.0.0/0` 這類全盤信任與單純的數字會在啟動時被拒絕。
 - 前面有反向代理或網頁伺服器時一定要設定 `TRUST_PROXY`，否則所有訪客共用代理的位址，一起被擋。Next 網頁伺服器的 server component 呼叫不帶訪客位址，部署時還要調高上限，細節在英文的 [../rules/api-and-errors.md](../rules/api-and-errors.md)。
 - 計數存在單一程序的記憶體；跑第二個 instance 時要改用共用儲存（Redis overlay 提供）。
-- 預設沒有任何路由豁免。路由要豁免（例如探針）時，在該路由的 `config` 設 `rateLimit: false`。
+- 預設只有健康檢查路由 `GET /api/health` 豁免。其他路由要豁免時，在該路由的 `config` 設 `rateLimit: false`。
 
 ## Query
 

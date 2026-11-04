@@ -36,7 +36,8 @@ export type ServerOptions = {
   /**
    * Which forwarded addresses to believe: `false` (the default) counts the
    * socket address, a list of proxy addresses trusts the forwarded header on
-   * a connection from one of them. The one setting both the client address and the limit read.
+   * a connection from one of them. It decides `request.ip`, which the limit counts; the
+   * client address in the access log reads the headers as given and ignores it.
    */
   trustProxy?: TrustProxy;
   /** The request limit; 300 per 60 seconds, in process memory, when omitted. */

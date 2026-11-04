@@ -243,6 +243,24 @@ await test('a source that cannot be read gives exit 2, names the source and is n
   assert.equal(exitCode(ok), 0);
 });
 
+await test('a package pinned at two versions is reported vulnerable on the affected version only', async () => {
+  const deps = [dep('twin', '1.0.0', ['a']), dep('twin', '2.0.0', ['b'])];
+  const bulk = [];
+  const getJson = async (url, init) => {
+    if (url.includes('security/advisories')) {
+      bulk.push(init.body);
+      const asked = init.body.twin?.[0];
+      return asked === '1.0.0' ? { twin: [{ id: 1, title: 'bad', severity: 'high', url: 'https://example.test/GHSA-twin' }] } : {};
+    }
+    return { versions: { '1.0.0': {}, '2.0.0': {} }, time: {} };
+  };
+  const report = await check({ deps, getJson, now: NOW });
+  assert.equal(report.complete, true);
+  assert.deepEqual(report.advisories.map((e) => [e.name, e.current]), [['twin', '1.0.0']]);
+  assert.equal(exitCode(report), 1);
+  assert.ok(bulk.some((b) => b.twin[0] === '1.0.0') && bulk.some((b) => b.twin[0] === '2.0.0'), 'both versions were queried');
+});
+
 fs.rmSync(base, { recursive: true, force: true });
 if (failures > 0) {
   console.log(`${failures} test(s) failed`);

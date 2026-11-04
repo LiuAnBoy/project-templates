@@ -26,7 +26,13 @@ class Settings(BaseSettings):
             none and counts the socket address.
     """
 
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore", case_sensitive=False)
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        extra="ignore",
+        case_sensitive=False,
+        # A validation message never repeats the value, which may be a secret.
+        hide_input_in_errors=True,
+    )
 
     host: str = "0.0.0.0"
     port: int = 8000

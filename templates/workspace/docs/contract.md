@@ -8,6 +8,8 @@
 
 目前只有 hello 路由的 schema，在 `contract/src/hello.ts`：`helloDataSchema`（`data` 的內容）與 `helloResponseSchema`（整個 envelope）。
 
+隨附的 `hello` 是唯一的例外：獨立的 server 沒有 contract 套件，所以 `server/` 的 `hello` 保有自己的 schema。組合專案新增的路由，要把形狀宣告在 `contract/`，不要放在 handler 旁邊。
+
 ## 如何使用
 
 套件建置成 `dist/`（ESM 與型別宣告），透過 `exports` 對外匯出，所以前後端都是匯入編譯後的 JavaScript，不需要 `transpilePackages`，也不需要執行時期的 TypeScript。
@@ -37,5 +39,5 @@ pnpm --filter @app/contract run build
 
 ## 命名
 
-- wire 上的 key 一律是 snake_case；程式內部維持 camelCase，在邊界逐個欄位對應。
+- wire 上的 key 一律是 snake_case；server 內部維持 camelCase，在邊界逐個欄位對應，web 則保留 wire 的形狀。
 - 成功的回應用 envelope：`{ "success": true, "payload": { "data": ... } }`；列表另在 `data` 旁帶 `page`、`page_size`、`total_count`。

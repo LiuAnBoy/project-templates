@@ -55,6 +55,17 @@ export class NetworkError extends Error {
   }
 }
 
+/** The auth token provider failed, so the request was never sent. */
+export class AuthTokenError extends Error {
+  /**
+   * @param cause The provider's own failure, kept for debugging.
+   */
+  constructor(cause?: unknown) {
+    super('The auth token could not be read', { cause });
+    this.name = 'AuthTokenError';
+  }
+}
+
 /** The request was sent but no answer arrived within the timeout. */
 export class TimeoutError extends NetworkError {
   /**

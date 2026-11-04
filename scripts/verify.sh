@@ -7,6 +7,7 @@
 #
 # Steps, in order:
 #   1. tooling: bash syntax of every script, render --check, the tooling tests
+#      (render, check-docs, versions)
 #   2. a codeload-shaped archive of the files on disk (make-archive.sh)
 #   3. every UI overlay through check-overlays.sh
 #   4. every template, extracted from that archive with the README's tar flags
@@ -306,6 +307,7 @@ step "bash syntax of every script" bash -c 'for f in "$0"/monorepo.sh "$0"/scrip
 step "render --check" node "$ROOT/scripts/render.mjs" --check
 step "render tests" node "$ROOT/scripts/test-render.mjs"
 step "check-docs tests" node "$ROOT/scripts/test-check-docs.mjs"
+step "versions tests" node "$ROOT/scripts/test-versions.mjs"
 
 ARCH="$WORK/archive.tar.gz"
 step "archive" bash "$ROOT/scripts/make-archive.sh" "$ARCH"

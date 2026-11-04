@@ -40,6 +40,7 @@ src/
 
 `config/env.ts` parses the environment once at boot; a malformed value stops the process, and every variable has a development default, so the server boots with no `.env`.
 
+- `main.ts` validates `process.env` before it builds the HTTP adapter, which is before `ConfigModule` loads anything, so Node itself loads `.env`: `pnpm start` runs `node --env-file-if-exists=.env dist/main.js` and `pnpm dev` runs `nest start` with the same flag through `--exec`.
 - Wire it with `ConfigModule.forRoot({ validate: validateEnv })` and read through `ConfigService<Env, true>`.
 - Add a variable when code reads it, not in anticipation, and add it to `.env.example` with a fake value.
 - The server listens on port 8000 by default.

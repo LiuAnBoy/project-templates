@@ -15,8 +15,8 @@
     "format:check": "prettier --check .",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "dev": "nest start --watch",
-    "start": "node dist/main.js"
+    "dev": "nest start --watch --exec \"node --env-file-if-exists=.env\"",
+    "start": "node --env-file-if-exists=.env dist/main.js"
   },
   "dependencies": {
     "@fastify/helmet": "13.2.0",

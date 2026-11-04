@@ -100,7 +100,7 @@ message 只含固定文字，或伺服器自己定義的名稱；message 不含�
 
 每條路由預設都有速率限制，不需要任何設定：每個 client 每 60 秒 300 次，所有路由合計。超過時回 429 `too many requests`，用失敗封套，並帶 `Retry-After` 標頭（秒）。
 
-調整方式是環境變數，寫在 `.env`（範例在 `.env.example`），啟動時驗證：
+調整方式是環境變數，寫在 `.env`（範例在 `.env.example`），啟動時驗證。`pnpm dev` 與 `pnpm start` 都由 Node 在伺服器建立之前載入 `.env`：
 
 | 變數                        | 預設值 | 說明                                             |
 | --------------------------- | ------ | ------------------------------------------------ |
@@ -112,7 +112,7 @@ message 只含固定文字，或伺服器自己定義的名稱；message 不含�
 - 前面有反向代理或網頁伺服器時一定要設定 `TRUST_PROXY`，否則所有訪客共用代理的位址，一起被擋。Next 網頁伺服器的 server component 呼叫不帶訪客位址，部署時還要調高上限，細節在英文的 [../rules/api-and-errors.md](../rules/api-and-errors.md)。
 - 計數存在單一程序的記憶體；跑第二個 instance 時要改用共用儲存（Redis overlay 提供）。
 - 只有存在的路由會被計數，不存在的路徑不計。
-- 預設沒有任何路由豁免。路由要豁免（例如探針）時，在該 handler 或 controller 加 `@SkipThrottle()`。
+- 預設只有健康檢查路由 `GET /api/health` 豁免。其他路由要豁免時，在該 handler 或 controller 加 `@SkipThrottle()`。
 
 ## Query
 

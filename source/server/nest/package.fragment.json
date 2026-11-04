@@ -1,7 +1,7 @@
 {
   "scripts": {
-    "dev": "nest start --watch",
-    "start": "node dist/main.js"
+    "dev": "nest start --watch --exec \"node --env-file-if-exists=.env\"",
+    "start": "node --env-file-if-exists=.env dist/main.js"
   },
   "dependencies": {
     "@nestjs/common": "11.2.8",
