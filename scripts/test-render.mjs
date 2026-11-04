@@ -110,13 +110,13 @@ function render(fx, args) {
   return { code: result.status, out: `${result.stdout}${result.stderr}` };
 }
 
-/** @type {Array<[string, () => void]>} */
+/** @type {Array<[string, () => void | Promise<void>]>} */
 const tests = [];
 /**
  * Register a test.
  *
  * @param {string} name Test name.
- * @param {() => void} fn Test body.
+ * @param {() => void | Promise<void>} fn Test body.
  * @returns {void}
  */
 const test = (name, fn) => tests.push([name, fn]);
@@ -336,10 +336,350 @@ test('an overlay that names its fragment and AGENTS layers drops the base contri
   assert.equal(fs.readFileSync(path.join(dir, 'AGENTS.md'), 'utf8'), '## O\n\nblock o\n');
 });
 
+/**
+ * Build a fixture repository from a file map and a recipes source.
+ *
+ * @param {Record<string, string>} files Path relative to the root, to content.
+ * @param {string} recipesSource Source of the recipes module.
+ * @returns {{root: string, recipes: string}} Fixture paths.
+ */
+function custom(files, recipesSource) {
+  counter += 1;
+  const root = path.join(base, `repo${counter}`);
+  for (const [rel, content] of Object.entries(files)) put(path.join(root, rel), content);
+  const recipes = path.join(root, 'recipes.mjs');
+  put(recipes, recipesSource);
+  return { root, recipes };
+}
+
+/**
+ * Read a rendered file.
+ *
+ * @param {{root: string}} fx Fixture.
+ * @param {string} rel Path under the root.
+ * @returns {string} Content.
+ */
+const read = (fx, rel) => fs.readFileSync(path.join(fx.root, rel), 'utf8');
+
+const COMPOSE_MAIN = '# Dev only.\n# Start: docker compose up.\n';
+const COMPOSE_PG =
+  'services:\n  postgres:\n    image: postgres:18-alpine\n    healthcheck:\n      test: ["CMD", "pg_isready"]\nvolumes:\n  postgres-data:\n';
+const COMPOSE_REDIS =
+  'services:\n  redis:\n    image: redis:8-alpine\nvolumes:\n  redis-data:\n';
+
+/**
+ * A fixture with a base layer and an overlay that carries compose blocks.
+ *
+ * @param {Record<string, string>} extra Extra files, which override the defaults.
+ * @returns {{root: string, recipes: string}} Fixture.
+ */
+function composeFixture(extra = {}) {
+  return custom(
+    {
+      'source/base/keep.txt': 'base\n',
+      'source/m/compose.fragment.yml': COMPOSE_MAIN,
+      'source/pg/compose.fragment.yml': COMPOSE_PG,
+      'source/rd/compose.fragment.yml': COMPOSE_REDIS,
+      'source/none/file.txt': 'none\n',
+      ...extra,
+    },
+    `export const recipes = { b: ['source/base'] };
+export const overlays = {
+  both: { base: 'b', layers: ['source/m', 'source/pg', 'source/rd'] },
+  solo: { base: 'b', layers: ['source/none'] },
+  pgonly: { base: 'b', layers: ['source/m', 'source/pg'] },
+};\n`,
+  );
+}
+
+test('compose blocks join by section: one services key, volumes under one key, layer order', () => {
+  const fx = composeFixture();
+  assert.equal(render(fx, ['--only', 'both']).code, 0);
+  const out = read(fx, 'overlays/both/docker-compose.dev.yml');
+  assert.equal(
+    out,
+    `${COMPOSE_MAIN}
+services:
+  postgres:
+    image: postgres:18-alpine
+    healthcheck:
+      test: ["CMD", "pg_isready"]
+  redis:
+    image: redis:8-alpine
+
+volumes:
+  postgres-data:
+  redis-data:
+`,
+  );
+  assert.equal(out.match(/^services:/gm).length, 1);
+  assert.equal(out.match(/^volumes:/gm).length, 1);
+  assert.equal(fs.existsSync(path.join(fx.root, 'overlays/both/compose.fragment.yml')), false);
+  // Layer order decides service order.
+  const swapped = composeFixture();
+  fs.appendFileSync(
+    swapped.recipes,
+    "overlays.swap = { base: 'b', layers: ['source/m', 'source/rd', 'source/pg'] };\n",
+  );
+  assert.equal(render(swapped, ['--only', 'swap']).code, 0);
+  const text = read(swapped, 'overlays/swap/docker-compose.dev.yml');
+  assert.ok(text.indexOf('  redis:') < text.indexOf('  postgres:'));
+});
+
+test('an overlay with no compose fragment has no compose file', () => {
+  const fx = composeFixture();
+  assert.equal(render(fx, ['--only', 'solo']).code, 0);
+  assert.equal(fs.existsSync(path.join(fx.root, 'overlays/solo/docker-compose.dev.yml')), false);
+  assert.equal(fs.existsSync(path.join(fx.root, 'overlays/solo/file.txt')), true);
+});
+
+test('a compose block without volumes writes no volumes key', () => {
+  const fx = composeFixture({ 'source/pg/compose.fragment.yml': 'services:\n  postgres:\n    image: x\n' });
+  assert.equal(render(fx, ['--only', 'pgonly']).code, 0);
+  assert.equal(
+    read(fx, 'overlays/pgonly/docker-compose.dev.yml'),
+    `${COMPOSE_MAIN}\nservices:\n  postgres:\n    image: x\n`,
+  );
+});
+
+test('a compose block with another top-level key fails the render', () => {
+  for (const key of ['name: app\n', 'networks:\n  net: {}\n', 'include:\n  - other.yml\n']) {
+    const fx = composeFixture({ 'source/pg/compose.fragment.yml': `${COMPOSE_PG}${key}` });
+    const result = render(fx, ['--only', 'pgonly']);
+    assert.notEqual(result.code, 0, key);
+    assert.match(result.out, /top-level key "(name|networks|include)" is not allowed/);
+  }
+  const odd = composeFixture({ 'source/pg/compose.fragment.yml': 'services:\n  a: {}\nstray line\n' });
+  assert.match(render(odd, ['--only', 'pgonly']).out, /unexpected top-level line/);
+});
+
+test('a service named twice, or blocks with no service, fail the render', () => {
+  const dup = composeFixture({ 'source/rd/compose.fragment.yml': 'services:\n  postgres:\n    image: x\n' });
+  const result = render(dup, ['--only', 'both']);
+  assert.notEqual(result.code, 0);
+  assert.match(result.out, /service "postgres" is defined twice/);
+  const none = composeFixture({ 'source/pg/compose.fragment.yml': '# nothing\n' });
+  assert.match(render(none, ['--only', 'pgonly']).out, /define no service/);
+});
+
+test('env, database, docs-index and Makefile fragments are joined in agentsLayers order', () => {
+  const fx = custom(
+    {
+      'source/a/env.fragment': 'A=1\n',
+      'source/b/env.fragment': '\n\nB=2\nC=3\n\n',
+      'source/a/database.fragment.md': '## Tables\n\nnone\n',
+      'source/b/database.fragment.md': '## Store\n\nmore\n',
+      'source/a/docs-index.fragment.md': '# Docs\n',
+      'source/b/Makefile.fragment': '\ttab-first-line\n',
+      'source/a/Makefile.fragment': 'all:\n\t@echo a\n',
+      'source/o/keep.txt': 'o\n',
+      'source/o/env.fragment': 'O=9\n',
+    },
+    `export const recipes = { ab: ['source/a', 'source/b'], ba: ['source/b', 'source/a'] };
+export const overlays = { over: { base: 'ab', layers: ['source/o'] } };\n`,
+  );
+  assert.equal(render(fx, ['--only', 'ab,ba,over']).code, 0);
+  assert.equal(read(fx, 'templates/ab/.env.example'), 'A=1\n\nB=2\nC=3\n');
+  assert.equal(read(fx, 'templates/ba/.env.example'), 'B=2\nC=3\n\nA=1\n');
+  assert.equal(read(fx, 'templates/ab/docs/database.md'), '## Tables\n\nnone\n\n## Store\n\nmore\n');
+  assert.equal(read(fx, 'templates/ab/docs/README.md'), '# Docs\n');
+  assert.equal(read(fx, 'templates/ab/Makefile'), 'all:\n\t@echo a\n\n\ttab-first-line\n');
+  // The overlay holds the base's blocks and its own, as one whole file.
+  assert.equal(read(fx, 'overlays/over/.env.example'), 'A=1\n\nB=2\nC=3\n\nO=9\n');
+  for (const name of ['env.fragment', 'database.fragment.md', 'docs-index.fragment.md', 'Makefile.fragment']) {
+    assert.equal(fs.existsSync(path.join(fx.root, 'templates/ab', name)), false);
+  }
+  assert.equal(fs.existsSync(path.join(fx.root, 'overlays/over/Makefile')), true);
+});
+
+/**
+ * A fixture whose base holds pyproject.toml, pnpm-workspace.yaml and
+ * .prettierignore, and whose overlay holds the fragments that edit them.
+ *
+ * @param {Record<string, string>} extra Files that override or add to the defaults.
+ * @returns {{root: string, recipes: string}} Fixture.
+ */
+function insertFixture(extra = {}) {
+  return custom(
+    {
+      'source/base/pyproject.toml':
+        '[project]\nname = "x"\ndependencies = [\n    "zeta==1.0",\n    "alpha==1.0",\n]\n\n[tool.other]\ndependencies = ["keep"]\n',
+      'source/base/pnpm-workspace.yaml':
+        "packages:\n  - web\nonlyBuiltDependencies:\n  - '@nestjs/core'\n  - esbuild\noverrides:\n  fastify: 1\n",
+      'source/base/.prettierignore': 'dist\nnode_modules\n',
+      'source/o/pyproject.dependencies': '# pins\nmiddle==2.0\nBeta_pkg[extra]==3.1\n',
+      'source/o/pnpm-allow.fragment': 'better-sqlite3\n@a/first\nesbuild\n',
+      'source/o/prettierignore.fragment': 'drizzle\ndist\ndrizzle\n',
+      ...extra,
+    },
+    `export const recipes = { b: ['source/base'] };
+export const overlays = { over: { base: 'b', layers: ['source/o'] } };\n`,
+  );
+}
+
+test('pins, allowlist names and ignore lines are inserted, sorted, into the base files', () => {
+  const fx = insertFixture();
+  assert.equal(render(fx, ['--only', 'over']).code, 0, 'render');
+  assert.equal(
+    read(fx, 'overlays/over/pyproject.toml'),
+    '[project]\nname = "x"\ndependencies = [\n    "alpha==1.0",\n    "Beta_pkg[extra]==3.1",\n    "middle==2.0",\n    "zeta==1.0",\n]\n\n[tool.other]\ndependencies = ["keep"]\n',
+  );
+  assert.equal(
+    read(fx, 'overlays/over/pnpm-workspace.yaml'),
+    "packages:\n  - web\nonlyBuiltDependencies:\n  - '@a/first'\n  - '@nestjs/core'\n  - better-sqlite3\n  - esbuild\noverrides:\n  fastify: 1\n",
+  );
+  assert.equal(read(fx, 'overlays/over/.prettierignore'), 'dist\nnode_modules\ndrizzle\n');
+  for (const name of ['pyproject.dependencies', 'pnpm-allow.fragment', 'prettierignore.fragment']) {
+    assert.equal(fs.existsSync(path.join(fx.root, 'overlays/over', name)), false);
+  }
+});
+
+test('the inserts write nothing when no layer has entries', () => {
+  const fx = insertFixture({
+    'source/o/pyproject.dependencies': '# none\n\n',
+    'source/o/pnpm-allow.fragment': '',
+    'source/o/prettierignore.fragment': '\n',
+    'source/o/keep.txt': 'o\n',
+  });
+  assert.equal(render(fx, ['--only', 'over']).code, 0);
+  for (const name of ['pyproject.toml', 'pnpm-workspace.yaml', '.prettierignore']) {
+    assert.equal(fs.existsSync(path.join(fx.root, 'overlays/over', name)), false, name);
+  }
+});
+
+test('the inserts fail loudly on an unknown shape', () => {
+  const cases = [
+    ['source/base/pyproject.toml', '[project]\ndependencies = ["one"]\n', /dependencies = \[/],
+    ['source/base/pyproject.toml', '[project]\ndependencies = [\n  "a==1"  # note\n]\n', /unexpected line in dependencies/],
+    ['source/base/pyproject.toml', '[tool.x]\nfoo = 1\n', /no \[project\] table/],
+    ['source/base/pyproject.toml', '[project]\ndependencies = [\n  "middle==1.0",\n]\n', /already listed/],
+    ['source/o/pyproject.dependencies', 'loose>=1.0\n', /not an exact pin/],
+    ['source/base/pnpm-workspace.yaml', 'packages:\n  - web\n', /no top-level "onlyBuiltDependencies:"/],
+    ['source/base/pnpm-workspace.yaml', 'onlyBuiltDependencies:\n  # none\n', /holds no "- name" lines/],
+    ['source/o/pnpm-allow.fragment', 'not a name!\n', /is not a package name/],
+  ];
+  for (const [file, content, pattern] of cases) {
+    const fx = insertFixture({ [file]: content });
+    const result = render(fx, ['--only', 'over']);
+    assert.notEqual(result.code, 0, `${file}: ${content}`);
+    assert.match(result.out, pattern, `${file}: ${content}`);
+  }
+  // A fragment with no file to edit fails too.
+  const fx = insertFixture();
+  fs.rmSync(path.join(fx.root, 'source/base/.prettierignore'));
+  const result = render(fx, ['--only', 'over']);
+  assert.notEqual(result.code, 0);
+  assert.match(result.out, /no layer holds \.prettierignore/);
+});
+
+/**
+ * Load a copy of the real recipes module, which exports the pure generators.
+ *
+ * @returns {Promise<Record<string, any>>} The module namespace.
+ */
+function loadRecipes() {
+  return import(new URL('./recipes.mjs', import.meta.url).href);
+}
+
+test('data overlay entries name, order and filter their layers', async () => {
+  const { buildDataOverlays, buildDataLive } = await loadRecipes();
+  const bases = {
+    nest: ['source/server/common', 'source/server/node', 'source/server/nest', 'source/data/none'],
+    fastapi: ['source/server/common', 'source/server/fastapi', 'source/data/none'],
+  };
+  const all = buildDataOverlays(bases, {
+    frameworks: ['nest', 'fastapi'],
+    stores: ['postgres', 'sqlite'],
+    redis: true,
+  });
+  assert.deepEqual(Object.keys(all), [
+    'nest-postgres',
+    'nest-postgres-redis',
+    'nest-sqlite',
+    'nest-sqlite-redis',
+    'nest-redis',
+    'fastapi-postgres',
+    'fastapi-postgres-redis',
+    'fastapi-sqlite',
+    'fastapi-sqlite-redis',
+    'fastapi-redis',
+  ]);
+  assert.deepEqual(all['nest-postgres-redis'].layers, [
+    'source/data/compose',
+    'source/data/integration/nest',
+    'source/data/sql/node',
+    'source/data/postgres/common',
+    'source/data/postgres/node',
+    'source/data/postgres/nest',
+    'source/data/redis/common',
+    'source/data/redis/node',
+    'source/data/redis/nest',
+    'source/data/wiring/nest/database-redis',
+  ]);
+  assert.deepEqual(all['fastapi-sqlite'].layers, [
+    'source/data/integration/fastapi',
+    'source/data/sql/fastapi',
+    'source/data/sqlite/common',
+    'source/data/sqlite/fastapi',
+    'source/data/wiring/fastapi/database',
+  ]);
+  assert.deepEqual(all['nest-redis'].layers.slice(-1), ['source/data/wiring/nest/redis']);
+  assert.equal(all['nest-redis'].layers.includes('source/data/sql/node'), false);
+  assert.equal(all['nest-sqlite'].layers.includes('source/data/compose'), false);
+  assert.equal(all['nest-sqlite-redis'].layers[0], 'source/data/compose');
+  assert.deepEqual(all['nest-sqlite'].agentsLayers.slice(0, 3), [
+    'source/server/common',
+    'source/server/node',
+    'source/server/nest',
+  ]);
+  for (const entry of Object.values(all)) {
+    assert.equal(entry.agentsLayers.includes('source/data/none'), false);
+    assert.deepEqual(entry.agentsLayers.slice(-entry.layers.length), entry.layers);
+    assert.equal(entry.base, entry.layers.at(-1).split('/')[3] ?? entry.base);
+  }
+  const noRedis = buildDataOverlays(bases, { frameworks: ['nest'], stores: ['postgres', 'sqlite'], redis: false });
+  assert.deepEqual(Object.keys(noRedis), ['nest-postgres', 'nest-sqlite']);
+  assert.deepEqual(buildDataOverlays(bases, { frameworks: [], stores: ['postgres'], redis: true }), {});
+  assert.deepEqual(
+    buildDataLive({ frameworks: ['nest'], stores: ['postgres', 'sqlite'], redis: true }),
+    ['nest-postgres-redis', 'nest-sqlite', 'nest-redis'],
+  );
+  assert.deepEqual(buildDataLive({ frameworks: ['nest'], stores: ['postgres', 'sqlite'], redis: false }), [
+    'nest-postgres',
+    'nest-sqlite',
+  ]);
+  assert.throws(
+    () => buildDataOverlays(bases, { frameworks: ['nest'], stores: ['nope'], redis: false }),
+    /no STORE_TRAITS entry for "nope"/,
+  );
+  assert.throws(
+    () => buildDataOverlays(bases, { frameworks: ['zzz'], stores: [], redis: false }),
+    /no base recipe for "zzz"/,
+  );
+});
+
+test('every layer of every data overlay runs in a live overlay, or the rule fails', async () => {
+  const { buildDataOverlays, buildDataLive, uncoveredLayers, dataOverlays, DATA_LIVE } = await loadRecipes();
+  const bases = { nest: ['source/server/common', 'source/server/node', 'source/server/nest'] };
+  const options = { frameworks: ['nest'], stores: ['postgres', 'sqlite'], redis: true };
+  const entries = buildDataOverlays(bases, options);
+  assert.deepEqual(uncoveredLayers(entries, buildDataLive(options)), []);
+  // A live set that leaves a layer out is reported by name.
+  assert.deepEqual(uncoveredLayers(entries, ['nest-sqlite', 'nest-redis']), [
+    'source/data/postgres/common',
+    'source/data/postgres/nest',
+    'source/data/postgres/node',
+    'source/data/wiring/nest/database-redis',
+  ]);
+  assert.deepEqual(uncoveredLayers(entries, ['nest-zzz']).slice(0, 1), ['unknown live overlay: nest-zzz']);
+  // The shipped recipes obey the rule.
+  assert.deepEqual(uncoveredLayers(dataOverlays, DATA_LIVE), []);
+});
+
 let failed = 0;
 for (const [name, fn] of tests) {
   try {
-    fn();
+    await fn();
     console.log(`ok   ${name}`);
   } catch (error) {
     failed += 1;

@@ -28,6 +28,15 @@
 # The check refuses to run when the port is already taken. Everything started
 # is killed on exit. Only package installation touches the network.
 # Environment: LIVE_PORT (default 8000), LIVE_TIMEOUT seconds (default 90).
+# A server with a required setting (a data overlay) cannot start from an empty
+# environment, so two variables describe its start instead:
+#   LIVE_DOTENV   path of a file copied to `.env` in the temp copy before the start
+#   LIVE_PREPARE  a command run in the temp copy, with an empty environment but
+#                 for PATH, HOME and TMPDIR, after install and build and before
+#                 the start (for example a migration); its `.env` is the one above
+# With LIVE_DOTENV the server is started from that `.env` and the check of the
+# TRUST_PROXY and RATE_LIMIT_MAX settings is left out, because it would replace
+# the file. Only a server (Node or Python) uses either variable.
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 PORT="${LIVE_PORT:-8000}"
@@ -188,6 +197,22 @@ assert_http() {
   echo "ok   unknown route answers the 404 failure envelope"
 }
 
+# prepare_server: place LIVE_DOTENV as `.env` in the temp copy and run LIVE_PREPARE.
+prepare_server() {
+  if [ -n "${LIVE_DOTENV:-}" ]; then
+    if [ ! -f "$LIVE_DOTENV" ]; then
+      echo "FAIL LIVE_DOTENV: $LIVE_DOTENV is not a file" >&2
+      return 1
+    fi
+    cp "$LIVE_DOTENV" "$TMP/.env" || return 1
+  fi
+  if [ -n "${LIVE_PREPARE:-}" ]; then
+    echo "--- prepare: $LIVE_PREPARE"
+    (cd "$TMP" && CI=true env -i PATH="$PATH" HOME="$HOME" TMPDIR="${TMPDIR:-/tmp}" bash -c "$LIVE_PREPARE") || return 1
+  fi
+  return 0
+}
+
 # run_server <install-and-start-description> : shared server flow after install.
 run_server() {
   if port_busy; then
@@ -289,11 +314,13 @@ check_one() {
       if [ "$rc" -eq 0 ] && has_script "$TMP" build; then
         step "pnpm run build" pnpm run build || rc=1
       fi
+      [ "$rc" -eq 0 ] && { prepare_server || rc=1; }
       [ "$rc" -eq 0 ] && { run_server pnpm run start || rc=1; }
-      [ "$rc" -eq 0 ] && { assert_env_file || rc=1; }
+      [ "$rc" -eq 0 ] && [ -z "${LIVE_DOTENV:-}" ] && { assert_env_file || rc=1; }
       ;;
     python-server)
       step "uv sync --frozen" uv sync --frozen || rc=1
+      [ "$rc" -eq 0 ] && { prepare_server || rc=1; }
       [ "$rc" -eq 0 ] && { run_server make start || rc=1; }
       ;;
   esac
