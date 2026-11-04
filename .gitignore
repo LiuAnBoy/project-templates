@@ -1,0 +1,9 @@
+todos/
+node_modules/
+.DS_Store
+.venv/
+__pycache__/
+.next/
+dist/
+test-results/
+playwright-report/
