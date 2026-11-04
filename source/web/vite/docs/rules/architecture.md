@@ -68,7 +68,7 @@ Why: a feature is deleted or moved as one folder, and a reader finds a thing by 
 
 ### The API proxy
 
-The browser calls `/api/v1` on its own origin. `vite.config.ts` forwards `/api` to `API_HOST` (default `http://localhost:8000`) in both `vite` (dev) and `vite preview`, so there is no CORS and the wrapper's base URL is a relative path. A production build has no proxy: put a reverse proxy in front that forwards `/api` to the API, so no API host is compiled into the bundle.
+The browser calls `/api/v1` on its own origin. `vite.config.ts` forwards `/api` to `API_HOST` (default `http://localhost:8000`) in both `vite` (dev) and `vite preview`, so there is no CORS. The wrapper's base URL (`shared/http/base-url.ts`) is always the relative `/api/v1`, and the bundle never reads `process`. A production build has no proxy: put a reverse proxy in front that forwards `/api` to the API, so no API host is compiled into the bundle.
 
 ### Ports
 

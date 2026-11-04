@@ -28,7 +28,7 @@
 
 ## 環境變數
 
-複製 `.env.example` 為 `.env`。目前只有 `API_HOST`（預設 `http://localhost:8000`），是 `next.config.ts` 轉發 `/api/v1` 的目標，建置時決定。`.env` 已被 git 忽略。
+複製 `.env.example` 為 `.env`。目前只有 `API_HOST`（預設 `http://localhost:8000`），同時有兩個用途：`next.config.ts` 在建置時用它決定 `/api/v1` 的轉發目標；伺服器端程式（server component）在執行時用它組出絕對的 API 網址。部署時兩處都要設定：`pnpm build` 之前，以及 `pnpm start` 的環境。`.env` 已被 git 忽略。
 
 ## 目錄
 

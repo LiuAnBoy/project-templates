@@ -55,7 +55,7 @@ Why: a feature is deleted or moved as one folder, and a reader finds a thing by 
 ### Routes and components
 
 - `app/page.tsx` is a server component that renders one module component. Metadata (`metadata` or `generateMetadata`) is exported from the page or the root layout.
-- Route groups separate audiences, for example `(public)` and `(dashboard)`, each with its own `layout.tsx`. Why: a layout per audience carries its own chrome and gate without conditionals.
+- Route groups separate audiences, for example `(public)` and `(dashboard)`, each with its own `layout.tsx`. Why: a layout per audience carries its own chrome (header, navigation) without conditionals. A layout is chrome only; it never decides who may see a page.
 - Default to server components. Add `'use client'` only to the file that needs state, effects, browser APIs or a client-only library, and keep that file small. Why: every client boundary ships its imports to the browser.
 - Providers are client components composed in `shared/providers/AppProviders.tsx` and mounted once in `app/layout.tsx`. Add a provider to `AppProviders`, never beside it.
 - React Query hooks from `modules/*/hooks` are client-only. A server component fetches through the same api function, because `shared/http/base-url.ts` resolves the base to an absolute URL on the server (`API_HOST`, default `http://localhost:8000`, plus `/api/v1`) and keeps it relative in the browser; or it passes initial data to a client component. Server-side calls do not carry the browser's token: pass what the call needs explicitly.
@@ -63,7 +63,9 @@ Why: a feature is deleted or moved as one folder, and a reader finds a thing by 
 
 ### The API proxy
 
-The browser calls `/api/v1` on its own origin and `next.config.ts` forwards it to the API, so there is no CORS and the wrapper's base URL is a relative path. The target is `API_HOST`, default `http://localhost:8000`. Rewrites are resolved at build time, so `API_HOST` is a build-time value; set it before `pnpm build`.
+The browser calls `/api/v1` on its own origin and `next.config.ts` forwards it to the API, so there is no CORS. In the browser the wrapper's base URL is the relative `/api/v1`. On the server (server components, route handlers) Node cannot resolve a relative URL, so `shared/http/base-url.ts` returns `API_HOST` plus `/api/v1`.
+
+`API_HOST` (default `http://localhost:8000`) is therefore read twice: at build time by `next.config.ts`, which bakes the rewrite target into the build, and at runtime by `base-url.ts` for server-side calls. In a deployment set it in both places, before `pnpm build` and in the environment of `pnpm start`; set only at build time, the browser works while server-side calls go to localhost:8000.
 
 ### Ports
 
@@ -76,7 +78,7 @@ The browser calls `/api/v1` on its own origin and `next.config.ts` forwards it t
 
 ### Environment
 
-Copy `.env.example` to `.env` to change `API_HOST`. `.env` is gitignored; never commit a real value or put a secret in a variable the browser can read (`NEXT_PUBLIC_` prefix).
+Copy `.env.example` to `.env` to change `API_HOST` (build time for the rewrite, runtime for server-side calls). `.env` is gitignored; never commit a real value or put a secret in a variable the browser can read (`NEXT_PUBLIC_` prefix).
 
 ### Generated files
 
