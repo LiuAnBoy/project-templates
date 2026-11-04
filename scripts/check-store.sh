@@ -44,7 +44,8 @@
 #     `test-integration`, `start`, `db-generate`, `db-migrate`, `db-status`; the
 #     models package and the migration folder are the PY_* values below.
 #   - db:status and db:migrate say "nothing pending" in one of the words of
-#     NOTHING_RE when there is no work, and the status output names a pending
+#     NOTHING_RE when there is no work (a zero counts only when no digit or
+#     identifier character follows it), and the status output names a pending
 #     migration by its tag (Node: the file name; Python: the revision id).
 #
 # Exit codes: 0 every check ran and passed; 1 a check failed; 2 usage; 3 Docker is
@@ -65,11 +66,14 @@ READY_TIMEOUT="${LIVE_TIMEOUT:-90}"
 
 # Where an overlay keeps the pieces the lifecycle step writes into. Both layouts
 # are defined by the store layers; change them here if a layer moves.
+# The probe's export uses a `.js` specifier, which nodenext requires, so the
+# overlay's drizzle.config.ts must load a schema entry written that way (or read
+# the whole folder).
 NODE_SCHEMA_DIR="src/db/schema"
 NODE_MIGRATIONS_GLOB="drizzle/*.sql"
 PY_MODELS_DIR="src/db/models"
 PY_MIGRATIONS_GLOB="alembic/versions/*.py"
-NOTHING_RE='no pending|nothing to|nothing pending|up to date|up-to-date|no-op|no migrations|pending[^0-9]*0|0 pending'
+NOTHING_RE='no pending|nothing to|nothing pending|up to date|up-to-date|no-op|no migrations|pending[^0-9]*0([^0-9A-Za-z_]|$)|(^|[^0-9A-Za-z_])0 pending'
 
 set -m # a background server gets its own process group so the whole tree can be killed
 
@@ -158,6 +162,14 @@ fail() {
   return 1
 }
 
+# fail_log <log> <message>: print the tail of a server log, then report the failure.
+# The log lives in a directory the exit trap removes, so its path is never named.
+fail_log() {
+  echo "server output, last lines:" >&2
+  tail -n 40 "$1" >&2
+  fail "$2"
+}
+
 # say <message>: print one passed assertion.
 say() {
   echo "ok   $1"
@@ -192,7 +204,7 @@ run_bounded() {
   secs="$1"
   log="$2"
   shift 2
-  (cd "$PROJ" && exec env -i PATH="$PATH" HOME="$HOME" TMPDIR="${TMPDIR:-/tmp}" "${RUN_ENV[@]}" "$@") >"$log" 2>&1 </dev/null &
+  (cd "$PROJ" && exec env -i PATH="$PATH" HOME="$HOME" TMPDIR="${TMPDIR:-/tmp}" PORT="$SERVER_PORT" "${RUN_ENV[@]}" "$@") >"$log" 2>&1 </dev/null &
   bound_pid=$!
   i=0
   limit=$((secs * 5))
@@ -212,25 +224,28 @@ run_bounded() {
 
 # start_server <log>: start the server from `.env` in the background.
 start_server() {
-  (cd "$PROJ" && exec env -i PATH="$PATH" HOME="$HOME" TMPDIR="${TMPDIR:-/tmp}" $START_CMD) >"$1" 2>&1 </dev/null &
+  (cd "$PROJ" && exec env -i PATH="$PATH" HOME="$HOME" TMPDIR="${TMPDIR:-/tmp}" PORT="$SERVER_PORT" $START_CMD) >"$1" 2>&1 </dev/null &
   SERVER_PID=$!
 }
 
-# http_code <path>: print the status code of GET on the server, 000 when it does not answer.
+# http_code <path> [max-seconds]: print the status code of GET on the server (curl gives
+# up after at most 5 seconds, or the given time), 000 when it does not answer.
 http_code() {
-  curl -s -o "$WORK/body" -w '%{http_code}' --max-time 5 "http://localhost:$SERVER_PORT$1"
+  curl -s -o "$WORK/body" -w '%{http_code}' --max-time "${2:-5}" "http://localhost:$SERVER_PORT$1"
 }
 
-# wait_health <code> <seconds>: succeed when /api/health answers that code within the time.
+# wait_health <code> <seconds>: succeed when /api/health answers that code before the
+# deadline; each request is cut off at the time left.
 wait_health() {
-  i=0
-  while [ "$i" -lt "$(($2 * 2))" ]; do
-    if [ "$(http_code /api/health)" = "$1" ]; then return 0; fi
+  deadline=$((SECONDS + $2))
+  while :; do
+    left=$((deadline - SECONDS))
+    [ "$left" -gt 0 ] || return 1
+    [ "$left" -gt 5 ] && left=5
+    if [ "$(http_code /api/health "$left")" = "$1" ]; then return 0; fi
     kill -0 "$SERVER_PID" 2>/dev/null || return 1
     sleep 0.5
-    i=$((i + 1))
   done
-  return 1
 }
 
 # leak_values: print every value of the project's `.env` that must never reach the output.
@@ -248,7 +263,7 @@ assert_no_leak() {
   for value in $(leak_values) "$@"; do
     [ -n "$value" ] || continue
     if grep -Fq -- "$value" "$log"; then
-      fail "the output holds a value from .env (a URL, a password or a path): see $log" || return 1
+      fail_log "$log" "the output holds a value from .env (a URL, a password or a path)" || return 1
     fi
   done
   return 0
@@ -352,7 +367,7 @@ export const checkProbe = pgTable('check_probe', { id: text('id').primaryKey() }
 EOF
     fi
     if [ -f "$PROJ/$NODE_SCHEMA_DIR/index.ts" ]; then
-      printf "\nexport * from './check_probe';\n" >>"$PROJ/$NODE_SCHEMA_DIR/index.ts"
+      printf "\nexport * from './check_probe.js';\n" >>"$PROJ/$NODE_SCHEMA_DIR/index.ts"
     fi
   else
     mkdir -p "$PROJ/$PY_MODELS_DIR" || return 1
@@ -420,7 +435,9 @@ step4_lifecycle() {
   say "migrate printed $tag"
   lifecycle_run status db:status db-status
   [ "$LIFECYCLE_RC" -eq 0 ] || { fail "status failed after migrate" || return 1; }
-  echo "$OUT" | grep -Eiq -- "$NOTHING_RE" || { fail "status after migrate does not say nothing is pending" || return 1; }
+  if echo "$OUT" | grep -Fq -- "$tag" || ! echo "$OUT" | grep -Eiq -- "$NOTHING_RE"; then
+    fail "status after migrate still lists $tag or does not say nothing is pending" || return 1
+  fi
   say "status is empty after migrate"
   lifecycle_run migrate db:migrate db-migrate
   [ "$LIFECYCLE_RC" -eq 0 ] || { fail "second migrate failed" || return 1; }
@@ -448,14 +465,14 @@ step5_empty_env() {
   for pair in "$first_rc:$WORK/empty.log" "$second_rc:$WORK/sentinel.log"; do
     rc="${pair%%:*}"
     log="${pair#*:}"
-    if [ "$rc" -eq 124 ]; then fail "the server kept running with its required settings missing" || return 1; fi
-    if [ "$rc" -eq 0 ]; then fail "the server exited 0 with its required settings missing" || return 1; fi
+    if [ "$rc" -eq 124 ]; then fail_log "$log" "the server kept running with its required settings missing" || return 1; fi
+    if [ "$rc" -eq 0 ]; then fail_log "$log" "the server exited 0 with its required settings missing" || return 1; fi
     for name in $CONN_VARS; do
-      grep -Fq -- "$name" "$log" || { fail "the startup error does not name $name (see $log)" || return 1; }
+      grep -Fq -- "$name" "$log" || { fail_log "$log" "the startup error does not name $name" || return 1; }
     done
   done
   if grep -Fq -- "$sentinel" "$WORK/sentinel.log"; then
-    fail "the startup error prints the value of another setting (HOST)" || return 1
+    fail_log "$WORK/sentinel.log" "the startup error prints the value of another setting (HOST)" || return 1
   fi
   say "an empty environment is refused, names $(echo $CONN_VARS), and leaks no value"
 }
@@ -482,14 +499,14 @@ step7_down_at_startup() {
       run_bounded "$STORE_BOUND" "$WORK/down-$svc.log" $START_CMD
       rc="$BOUND_RC"
       compose_do up -d --wait >/dev/null || { fail "could not start the services again" || return 1; }
-      if [ "$rc" -eq 124 ]; then fail "with $svc stopped the server kept running past ${STORE_BOUND}s" || return 1; fi
-      if [ "$rc" -eq 0 ]; then fail "with $svc stopped the server exited 0" || return 1; fi
+      if [ "$rc" -eq 124 ]; then fail_log "$WORK/down-$svc.log" "with $svc stopped the server kept running past ${STORE_BOUND}s" || return 1; fi
+      if [ "$rc" -eq 0 ]; then fail_log "$WORK/down-$svc.log" "with $svc stopped the server exited 0" || return 1; fi
       case "$svc" in
         postgres*) pattern="postgres|database" ;;
         *) pattern="$svc" ;;
       esac
       grep -Eiq -- "$pattern" "$WORK/down-$svc.log" ||
-        { fail "with $svc stopped the output does not name the dependency (see $WORK/down-$svc.log)" || return 1; }
+        { fail_log "$WORK/down-$svc.log" "with $svc stopped the output does not name the dependency" || return 1; }
       assert_no_leak "$WORK/down-$svc.log" || return 1
       say "with $svc stopped the server exits $rc, names the dependency and leaks no secret"
     done
@@ -501,11 +518,11 @@ step7_down_at_startup() {
     run_bounded "$STORE_BOUND" "$WORK/down-sqlite.log" $START_CMD
     rc="$BOUND_RC"
     mv "$PROJ/.env.held" "$PROJ/.env" || return 1
-    if [ "$rc" -eq 124 ]; then fail "with a wrong SQLite path the server kept running" || return 1; fi
-    if [ "$rc" -eq 0 ]; then fail "with a wrong SQLite path the server exited 0" || return 1; fi
+    if [ "$rc" -eq 124 ]; then fail_log "$WORK/down-sqlite.log" "with a wrong SQLite path the server kept running" || return 1; fi
+    if [ "$rc" -eq 0 ]; then fail_log "$WORK/down-sqlite.log" "with a wrong SQLite path the server exited 0" || return 1; fi
     if [ -e "$PROJ/$wrong" ] || [ -e "$wrong" ]; then fail "a wrong SQLite path created a file" || return 1; fi
     grep -Eiq -- "sqlite|database" "$WORK/down-sqlite.log" ||
-      { fail "with a wrong SQLite path the output does not name the dependency" || return 1; }
+      { fail_log "$WORK/down-sqlite.log" "with a wrong SQLite path the output does not name the dependency" || return 1; }
     assert_no_leak "$WORK/down-sqlite.log" "$wrong" || return 1
     say "with a wrong SQLite path the server exits $rc, creates no file and leaks no path"
   fi
@@ -520,13 +537,13 @@ step8_outage() {
   i=0
   while [ "$i" -lt "$READY_TIMEOUT" ]; do
     if ! kill -0 "$SERVER_PID" 2>/dev/null; then
-      fail "the server exited before it was ready (see $WORK/outage.log)" || return 1
+      fail_log "$WORK/outage.log" "the server exited before it was ready" || return 1
     fi
     [ "$(http_code /api/health)" = 200 ] && READY=1 && break
     sleep 1
     i=$((i + 1))
   done
-  [ "$READY" -eq 1 ] || { fail "health did not answer 200 within ${READY_TIMEOUT}s" || return 1; }
+  [ "$READY" -eq 1 ] || { fail_log "$WORK/outage.log" "health did not answer 200 within ${READY_TIMEOUT}s" || return 1; }
   for svc in $SERVICES; do
     compose_do stop "$svc" >/dev/null || { fail "could not stop $svc" || return 1; }
     wait_health 503 "$HEALTH_BOUND" || { fail "health did not answer 503 within ${HEALTH_BOUND}s with $svc stopped" || return 1; }
@@ -543,7 +560,7 @@ step8_outage() {
     fi
     compose_do up -d --wait >/dev/null || { fail "could not start $svc again" || return 1; }
     wait_health 200 "$READY_TIMEOUT" || { fail "health did not recover to 200 after $svc came back" || return 1; }
-    kill -0 "$SERVER_PID" 2>/dev/null || { fail "the server ended during the $svc outage" || return 1; }
+    kill -0 "$SERVER_PID" 2>/dev/null || { fail_log "$WORK/outage.log" "the server ended during the $svc outage" || return 1; }
     say "with $svc back health answers 200 and the process never ended"
   done
   stop_server

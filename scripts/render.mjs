@@ -395,7 +395,7 @@ export function buildCompose(layerDirs) {
             `${file}: top-level key "${key[1]}" is not allowed in a compose block (only services and volumes)`,
           );
         }
-        const value = (key[2] ?? '').replace(/\s+#.*$/, '').trim();
+        const value = (key[2] ?? '').replace(/(^|\s)#.*$/, '').trim();
         if (value !== '' && value !== '{}') {
           throw new Error(`${file}: "${key[1]}:" must open an indented block, found "${value}"`);
         }

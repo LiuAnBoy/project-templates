@@ -453,6 +453,19 @@ test('a compose block with another top-level key fails the render', () => {
   assert.match(render(odd, ['--only', 'pgonly']).out, /unexpected top-level line/);
 });
 
+test('a top-level key may carry a trailing comment', () => {
+  const fx = composeFixture({
+    'source/pg/compose.fragment.yml': 'services: # the store\n  postgres:\n    image: x\nvolumes: {} # none\n',
+  });
+  assert.equal(render(fx, ['--only', 'pgonly']).code, 0);
+  assert.equal(
+    read(fx, 'overlays/pgonly/docker-compose.dev.yml'),
+    `${COMPOSE_MAIN}\nservices:\n  postgres:\n    image: x\n`,
+  );
+  const bad = composeFixture({ 'source/pg/compose.fragment.yml': 'services: value # note\n' });
+  assert.match(render(bad, ['--only', 'pgonly']).out, /must open an indented block/);
+});
+
 test('a service named twice, or blocks with no service, fail the render', () => {
   const dup = composeFixture({ 'source/rd/compose.fragment.yml': 'services:\n  postgres:\n    image: x\n' });
   const result = render(dup, ['--only', 'both']);
