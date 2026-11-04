@@ -92,7 +92,6 @@ const SERVER_DOCS = [
   'docs/apis/hello.md',
   'docs/database.md',
   ...RULES_SERVER,
-  'docs/rules/templates/migrate.sh',
 ];
 /** Required paths per server framework. */
 export const REQUIRED_SERVER = {

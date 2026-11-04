@@ -13,9 +13,9 @@ function safeName(name: string): string {
 /**
  * An error the client may see; its code never leaves the process.
  *
- * It extends `Error`, not `HttpException`, and takes a failure-table code and
- * never free text. Services throw it; controllers and repositories do not
- * build HTTP responses.
+ * It extends `Error`, not a framework HTTP exception, and takes a
+ * failure-table code and never free text. Services throw it; controllers,
+ * routes and repositories do not build HTTP responses.
  */
 export class AppError extends Error {
   readonly status: number;

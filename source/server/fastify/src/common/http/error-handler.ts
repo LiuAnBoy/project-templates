@@ -9,9 +9,10 @@ import {
   isResponseSerializationError,
 } from 'fastify-type-provider-zod';
 
+import { AppError } from '../errors/app-error.js';
 import { isDependencyOutage } from '../errors/dependency-failure.js';
 import { describeFailure } from '../errors/failure.js';
-import { AppError, FAILURES, failureForStatus } from '../errors/failures.js';
+import { FAILURES, failureForStatus } from '../errors/failures.js';
 import { failure } from './envelope.js';
 
 /**

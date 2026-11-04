@@ -1,6 +1,6 @@
 ## Stack
 
-Stack: NestJS 11 on Fastify, zod validation (nestjs-zod), nestjs-pino, dayjs behind `src/common/date.ts`, Vitest, ESLint 10 and Prettier, pnpm. No database yet; when one is needed: PostgreSQL, hand-written SQL migrations run by `db/migrate.sh`, no ORM owning the schema.
+Stack: NestJS 11 on Fastify, zod validation (nestjs-zod), nestjs-pino, dayjs behind `src/common/date.ts`, Vitest, ESLint 10 and Prettier, pnpm. No database yet; when one is needed: PostgreSQL through Drizzle with migrations generated from its schema (`docs/rules/postgres.md`).
 
 This is a starter with one public route, `GET /api/v1/hello`, built on the shared handlers (envelope, failure table, exception filter, request id, access log). Add modules on top of them; do not rewrite them.
 

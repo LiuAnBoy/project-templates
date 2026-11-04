@@ -43,21 +43,12 @@ const STATUS_CODES: Readonly<Record<number, FailureCode>> = {
 };
 
 /**
- * Restricts a caller-supplied name to a safe token.
- *
- * @param name - A parameter or field name from a closed set the server defines.
- * @returns The name when it matches `[A-Za-z0-9_.-]{1,40}`, otherwise `?`.
- */
-function safeName(name: string): string {
-  return /^[A-Za-z0-9_.-]{1,40}$/.test(name) ? name : '?';
-}
-
-/**
  * Finds the table entry that answers a status raised outside the services.
  *
- * Used for errors a framework or a guard raised: the client sees the table's
- * message, never the framework's own text. A status with no entry answers the
- * entry for 400 (4xx) or `internal` (anything else).
+ * Used for errors a framework or a guard raised (a framework HTTP exception,
+ * a Fastify error): the client sees the table's message, never the
+ * framework's own text. A status with no entry answers the entry for 400 (4xx) or
+ * `internal` (anything else).
  *
  * @param status - The HTTP status of the raised error.
  * @returns The status to answer with and the fixed message.
@@ -70,25 +61,4 @@ export function failureForStatus(status: number): {
     STATUS_CODES[status] ??
     (status >= 400 && status < 500 ? 'invalidRequest' : 'internal');
   return FAILURES[code];
-}
-
-/** An error the client may see; its code never leaves the process. */
-export class AppError extends Error {
-  readonly status: number;
-
-  /**
-   * @param code - A key of the failure table.
-   * @param name - Fills `{name}` in a templated message.
-   */
-  constructor(
-    readonly code: FailureCode,
-    name?: string,
-  ) {
-    const entry = FAILURES[code];
-    super(
-      name ? entry.message.replace('{name}', safeName(name)) : entry.message,
-    );
-    this.name = 'AppError';
-    this.status = entry.status;
-  }
 }

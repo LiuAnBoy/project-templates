@@ -45,9 +45,9 @@ const STATUS_CODES: Readonly<Record<number, FailureCode>> = {
 /**
  * Finds the table entry that answers a status raised outside the services.
  *
- * Used for errors a framework or a guard raised (a Nest `HttpException`, a
- * Fastify error): the client sees the table's message, never the framework's
- * own text. A status with no entry answers the entry for 400 (4xx) or
+ * Used for errors a framework or a guard raised (a framework HTTP exception,
+ * a Fastify error): the client sees the table's message, never the
+ * framework's own text. A status with no entry answers the entry for 400 (4xx) or
  * `internal` (anything else).
  *
  * @param status - The HTTP status of the raised error.

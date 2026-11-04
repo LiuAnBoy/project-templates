@@ -2,7 +2,8 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
 
 import { bounded } from '../concurrency/bounded.js';
-import { AppError, FAILURES } from '../errors/failures.js';
+import { AppError } from '../errors/app-error.js';
+import { FAILURES } from '../errors/failures.js';
 import { buildServer } from '../../server.js';
 
 type App = Awaited<ReturnType<typeof buildServer>>;

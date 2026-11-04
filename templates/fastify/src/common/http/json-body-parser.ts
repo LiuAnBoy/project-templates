@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 
-import { AppError } from '../errors/failures.js';
+import { AppError } from '../errors/app-error.js';
 
 /**
  * Parses JSON bodies with Fastify's own safe parser, plus two deliberate rules.

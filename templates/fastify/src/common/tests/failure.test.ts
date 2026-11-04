@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
 import { isDependencyOutage } from '../errors/dependency-failure.js';
-import { AppError, FAILURES, failureForStatus } from '../errors/failures.js';
+import { AppError } from '../errors/app-error.js';
+import { FAILURES, failureForStatus } from '../errors/failures.js';
 import { bounded } from '../concurrency/bounded.js';
 
 describe('dependency outage classification', () => {

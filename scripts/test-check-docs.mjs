@@ -197,7 +197,7 @@ test('a missing required path fails for each type', () => {
     'web-ui': 'src/shared/hooks/useNotification.ts',
     nest: 'docs/rules/redis.md',
     fastify: 'src/server.ts',
-    fastapi: 'docs/rules/templates/migrate.sh',
+    fastapi: 'docs/database.md',
     workspace: 'docs/contract.md',
   };
   for (const [kind, rel] of Object.entries(dirs)) {

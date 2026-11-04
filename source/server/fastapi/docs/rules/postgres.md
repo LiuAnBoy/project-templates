@@ -1,116 +1,66 @@
-# PostgreSQL: migrations, the runner, query layer and transactions
+# PostgreSQL: models, migrations, query layer and transactions
 
-PostgreSQL is the default database. The schema is owned by hand-written SQL files and one runner that records which ran. No ORM and no ORM migration tool owns the schema. One style means one runner, one review habit and a deploy that depends only on the repo.
+PostgreSQL is the default database, accessed through SQLAlchemy 2 with Alembic for migrations. The SQLAlchemy models own the database schema; migrations are generated from them, reviewed and committed. One source of truth means a schema change is one diff that a reviewer reads in two forms: the models and the migration they produced.
 
 ## Current state
 
-This template ships no database: no driver is installed, there is no `db/` directory, and the database page lists no tables. The rules below apply from the first table on. To start:
+This template ships no database yet: no driver or SQLAlchemy package is installed, there is no `migrations/` directory, and the database page lists no tables. The rules below apply from the first table on. To start:
 
-1. Create `db/init.sql`, an empty `db/migrations/`, and copy `docs/rules/templates/migrate.sh` to `db/migrate.sh`; each project carries its own copy.
-2. Wrap the runner as `make migrate`, a Makefile target that runs `bash db/migrate.sh`.
-3. Add psycopg 3 with its pool (`uv add`, then pin it exactly), as described below.
-4. Add `DATABASE_URL` to the env schema when code reads it, and to `.env.example` with a fake value such as `postgresql://app:app@localhost:5432/app`. The runner needs bash 3.2+, psql 14+ (and `pg_dump` for the check), and `sha256sum` or `shasum`.
-5. Record the tables on the database page in the same change.
+1. Add SQLAlchemy 2 (with its async support), an async PostgreSQL driver and Alembic (`uv add`, then pin them exactly).
+2. Add the models under `src/db/models.py` (or a package), an Alembic environment in `migrations/` whose `env.py` reads `DATABASE_URL` and fails when it is missing, and the Makefile targets `db-generate` (`alembic revision --autogenerate`), `db-migrate` (`alembic upgrade head`, printing the revisions it applied) and `db-status` (lists the pending revisions).
+3. Add `DATABASE_URL` to the settings when code reads it, and to `.env.example` with a fake value such as `postgresql+psycopg://app:app@localhost:5432/app`.
+4. Record the tables on the database page in the same change.
 
-## Layout
+## Models and migrations
 
-```text
-db/init.sql                  full schema of a new environment
-db/migrations/               YYYYMMDD_00X_<name>.sql
-db/migrate.sh                a copy of docs/rules/templates/migrate.sh
-```
+- Models live in one place, `src/db/`, and nothing else defines a table. Write every column name explicitly in snake_case.
+- After changing a model run `make db-generate`. It writes a migration into `migrations/versions/`. Read it in review like code (autogenerate misses renames and some constraints), and commit it together with the model change.
+- Never edit an applied migration. Fix forward with a new one generated from the models.
+- Destructive changes (drop a column or table, narrow a type) ship in their own migration, after the code that stopped using the thing has been deployed.
 
-## Migration files
+## Migration lifecycle
 
-- Name: `YYYYMMDD_00X_<name>.sql` (date, a three-digit sequence for that day, a short name). A file in `db/migrations/` with any other name stops the run before any file applies.
-- Files apply in name order, so the date and sequence are the order. Never edit an applied file: the runner records a checksum and refuses to run when an applied file changed. Fix forward with a new file.
-- Every file is rerunnable: `CREATE TABLE IF NOT EXISTS`, `ADD COLUMN IF NOT EXISTS`, `CREATE INDEX IF NOT EXISTS`, and data changes guarded so a second run changes nothing (`WHERE` the target state is not yet true, `ON CONFLICT DO NOTHING`). Reason: a half-known environment or a restored backup can replay a file safely.
-- A file stays inside the runner's transaction. Not allowed:
-  - transaction control at the top level of a file (`BEGIN`, `COMMIT`, `ROLLBACK`, `SAVEPOINT` and the like);
-  - a psql backslash command, or a statement starting with a psql variable;
-  - a statement that cannot run in a transaction (`CREATE INDEX CONCURRENTLY`, `DROP INDEX CONCURRENTLY`, `VACUUM`);
-  - a change to how strings are lexed (`standard_conforming_strings`, `backslash_quote`, `set_config`, `RESET ALL`).
+### Baseline
 
-  A `DO $$ BEGIN ... END $$` block, a `BEGIN ATOMIC` function body and `REFRESH MATERIALIZED VIEW CONCURRENTLY` are fine.
+- Before the project's first production deploy there is one baseline. While nothing is deployed, a model change regenerates it: remove the generated revisions and run `make db-generate` again, so the first deploy applies a single revision.
+- After the first production deploy the baseline never changes. Every model change is a new generated revision, reviewed and committed.
 
-- The runner wraps each file and its `public.schema_migrations` row in one transaction and enforces the rule. Before anything applies, it scans `init.sql` and every pending file and refuses a violation. A file written in good faith therefore either applies with its row or leaves neither. The scan guards against mistakes, not against a file built to evade it. If a file does commit part of itself, the runner says so ("committed outside the runner's transaction") and never claims a rollback the server did not confirm.
-- Destructive changes (drop a column or table, narrow a type) ship in their own file, after the code that stopped using the thing has been deployed.
+### Applying and tracking
 
-## `init.sql` before and after the first production deploy
+- Alembic records the applied revision in `alembic_version`; the files in `migrations/versions/` list the revisions that exist. Nothing keeps its own list by hand.
+- `make db-migrate` is the only way a shared database changes. It applies only what is not recorded, does nothing when the database is up to date, and prints the revisions it applied, so a deploy log shows which ran instead of a silent success.
+- `make db-status` lists the revisions that are still pending.
+- Run `make db-migrate` once per deploy, before the new code starts. Two runners against one database at once are not guarded.
 
-- Before a project's first production deploy there is nothing to migrate: every schema change goes straight into `init.sql`, and `db/migrations/` stays empty.
-- After the first production deploy each change is a new migration file, and `init.sql` is updated to the final schema in the same change. Reason: a new environment runs `init.sql` and then every migration, so both must describe the same schema.
+### Branches and heads
 
-## Running the runner
+Two revisions generated on separate branches both descend from the same parent, so after the merge Alembic reports multiple heads and refuses to upgrade. Resolve them with a merge revision (`alembic merge`) before deploying, and commit it.
 
-Modes:
+## Query layer: SQLAlchemy 2
 
-- `bash db/migrate.sh` (same as `apply`): applies every migration not yet recorded. A database without `public.schema_migrations` is a new environment: `init.sql` runs first, then every migration, each recorded.
-- `bash db/migrate.sh check <previous-init.sql>`: the schema check, below.
-
-Connection: `DATABASE_URL` (a `postgresql://` URL) when set, otherwise the libpq `PG*` variables (`PGHOST`, `PGPORT`, `PGUSER`, `PGDATABASE`, `PGPASSWORD`). The script holds no default host, port or credential. Exit codes: 0 success, 1 failure or schema difference, 2 usage error.
-
-One runner per deploy: two runners against one database at once are not guarded.
-
-## The schema check, in review
-
-The check proves that `init.sql` and the migrations agree. It builds one empty scratch database from the previous `init.sql` plus every migration and another from the new `init.sql`, and their `pg_dump --schema-only` output must match. It applies only after the project's first production deploy, and then it runs whenever a change touches `db/`. Before that deploy `db/migrations/` is empty and `init.sql` is the only schema source, so there is nothing to compare and the check is not run.
-
-```bash
-git show master:db/init.sql > /tmp/prev_init.sql   # the trunk's init.sql (use main when that is the trunk)
-bash db/migrate.sh check /tmp/prev_init.sql
-```
-
-Rules for the check:
-
-- The role needs `CREATEDB`: both scratch databases are created on the target server. Point it at a development server, never a production one.
-- Scratch names are `migrate_check_<random>_prev` and `_new`. `MIGRATE_SCRATCH_SUFFIX` replaces the random part when set (letters, digits, `_`); tests use it to force a collision.
-- On exit, failure included, it drops only the databases whose `CREATE` succeeded in this run. A name that already exists makes the check fail and that database is left alone.
-- A `DATABASE_URL` whose query string carries a `dbname` parameter (any case, or percent-encoded) is refused, because it would override the scratch database name. Leave `dbname` out of the query.
-
-## Query layer: psycopg 3, hand-written SQL
-
-- psycopg 3 with `AsyncConnectionPool(open=False)` from `psycopg_pool`, rows as `dict_row`. The pool is opened and closed in the app lifespan, not at import, and stored on `app.state`.
-- Rows map to pydantic models in each module's `rows.py`; the repository returns those models, never raw dicts.
-- All SQL is parameterised (`%s` placeholders with a parameter tuple); never format values into the string.
-
-```python
-@asynccontextmanager
-async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    """Open the pool on startup and close it on shutdown.
-
-    Args:
-        app: The application instance; the pool is stored on its state.
-
-    Yields:
-        Control to the running application.
-    """
-    pool = AsyncConnectionPool(settings.database_url, open=False, kwargs={"row_factory": dict_row})
-    await pool.open(wait=True)
-    app.state.pool = pool
-    try:
-        yield
-    finally:
-        await pool.close()
-```
+- Use SQLAlchemy 2 style (`select(...)`, `AsyncSession`) with an async engine. The engine is created and disposed in the app lifespan, not at import, and stored on `app.state`.
+- Rows map to pydantic models in each module's `schemas.py` or `rows.py`; the repository returns those models, never ORM instances or raw rows.
+- Values always travel as bound parameters; never format values into a SQL string. Raw SQL through `text()` is fine in a repository when the query builder cannot express the query.
 
 ## Repositories and transactions
 
 - SQL appears only in repositories. Routers and services never build a query. A query has one place to review and to change when the schema moves.
-- The service owns the transaction scope. It opens `pool.connection()` and `conn.transaction()` itself and passes the connection to the repository. The commit happens inside the service call, so a commit failure surfaces in the request and becomes a proper failure answer, instead of raising in a dependency's exit code after the response is built.
-- A repository method takes the connection as its first argument after `self`; it never calls `pool.connection()` itself for a write.
-- A read-only service method may open `pool.connection()` without `transaction()`.
+- The service owns the transaction scope. It opens `session_factory()` and `session.begin()` itself and passes the session to the repository. The commit happens inside the service call, so a commit failure surfaces in the request and becomes a proper failure answer, instead of raising in a dependency's exit code after the response is built.
+- A repository method takes the session as its first argument after `self`; it never opens a session itself for a write.
+- A read-only service method may open a session without `begin()`.
 - Queue and cache side effects run after the `async with` block ends, because they cannot join the transaction; see `redis.md`.
 
 ```python
 class OrderService:
     """Order business rules."""
 
-    def __init__(self, pool: AsyncConnectionPool, repo: OrderRepository) -> None:
-        self._pool = pool
+    def __init__(
+        self, session_factory: async_sessionmaker[AsyncSession], repo: OrderRepository
+    ) -> None:
+        self._session_factory = session_factory
         self._repo = repo
 
-    async def place(self, user_id: int, body: PlaceOrder) -> OrderRow:
+    async def place(self, user_id: UUID, body: PlaceOrder) -> OrderRow:
         """Create an order and reserve its stock in one transaction.
 
         Args:
@@ -123,13 +73,13 @@ class OrderService:
         Raises:
             ApiError: With code ``out_of_stock`` when a line cannot be reserved.
         """
-        async with self._pool.connection() as conn, conn.transaction():
-            order = await self._repo.insert(conn, user_id, body)
-            await self._repo.reserve(conn, order.id, body.lines)
+        async with self._session_factory() as session, session.begin():
+            order = await self._repo.insert(session, user_id, body)
+            await self._repo.reserve(session, order.id, body.lines)
         return order
 ```
 
-Tests run the service against a real database inside a connection that rolls back after each test; pin the test database name in the fixture and refuse a non-local host, so a stray shell variable can never point the suite at a real database.
+Tests run the service against a real database inside a session whose transaction rolls back after each test; pin the test database name in the fixture and refuse a non-local host, so a stray shell variable can never point the suite at a real database.
 
 ## Rows and types
 
@@ -139,14 +89,22 @@ Tests run the service against a real database inside a connection that rolls bac
 - Every table has `id`, `created_at` and `updated_at`. `id` is a `uuid` primary key defaulting to `gen_random_uuid()` and travels as a string on the wire; do not use serial or identity integers as public ids. `created_at` and `updated_at` are `timestamptz NOT NULL DEFAULT now()`, and every update sets `updated_at` (in the repository's update statement, or by a trigger).
 - There is no soft delete by default: a delete removes the row. A table that needs one adds a nullable `deleted_at timestamptz`, and its repository filters on it everywhere.
 
-```sql
-CREATE TABLE IF NOT EXISTS order_items (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  order_id uuid NOT NULL REFERENCES orders (id),
-  page_count integer NOT NULL CHECK (page_count > 0),
-  created_at timestamptz NOT NULL DEFAULT now(),
-  updated_at timestamptz NOT NULL DEFAULT now()
-);
+```python
+class OrderItem(Base):
+    """One line of an order."""
+
+    __tablename__ = "order_items"
+    __table_args__ = (CheckConstraint("page_count > 0"),)
+
+    id: Mapped[UUID] = mapped_column("id", primary_key=True, server_default=func.gen_random_uuid())
+    order_id: Mapped[UUID] = mapped_column("order_id", ForeignKey("orders.id"))
+    page_count: Mapped[int] = mapped_column("page_count")
+    created_at: Mapped[datetime] = mapped_column(
+        "created_at", DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        "updated_at", DateTime(timezone=True), server_default=func.now()
+    )
 ```
 
 ### Types and constraints
