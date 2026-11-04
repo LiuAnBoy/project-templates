@@ -55,6 +55,7 @@ const RULES_SERVER = [
 
 /** Paths every web template needs, whatever its UI variant. */
 export const REQUIRED_WEB = [
+  'CLAUDE.md',
   'docs/README.md',
   'docs/styles.md',
   'docs/components/README.md',
@@ -69,12 +70,13 @@ export const REQUIRED_WEB = [
   'src/shared/hooks/useMediaQuery.ts',
   'src/shared/utils/date.ts',
   'src/shared/providers/UiProvider.tsx',
+  'src/shared/providers/ThemeVariables.tsx',
+  'src/shared/styles/theme.ts',
 ];
 /** Extra paths of a UI-library web template. */
 export const REQUIRED_WEB_UI = [
   'docs/components/useNotification.md',
   'src/shared/hooks/useNotification.ts',
-  'src/shared/styles/theme.ts',
 ];
 /** Paths that a plain web template must not have. */
 export const FORBIDDEN_WEB_PLAIN = [

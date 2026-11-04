@@ -5,15 +5,23 @@ This template ships no UI library and no styling framework. The only stylesheet 
 ## What exists
 
 - Markup is plain React elements.
-- There is no notification hook, no `UiProvider` and no theme file. A component that must tell the user something renders the message itself.
+- `src/shared/providers/UiProvider.tsx` is a passthrough that renders its children and is composed by `AppProviders`. It is the one slot a UI library fills.
+- `src/shared/styles/theme.ts` is the one source of every site-wide colour, font and radius. `src/shared/providers/ThemeVariables.tsx`, composed by `AppProviders`, publishes it as CSS custom properties on the root, and `global.css` reads them.
+- There is no notification hook. A component that must tell the user something renders the message itself.
 
-## Adding a UI library
+## The theme rule
 
-Choose one library for the whole app, then in the same change:
+Every site-wide colour, font, radius and spacing value comes from `src/shared/styles/theme.ts`. No hex colour or font literal appears in `modules/` or in shared components; read the CSS variable (`var(--theme-primary)`) instead. A new value is added to `theme.ts` and to its `cssVariables`, not written where it is used. There is no top-level `src/styles/`.
 
-1. Add its provider in `src/shared/providers/` and compose it in `AppProviders.tsx`, outside `QueryProvider`.
+## Choosing a UI library
+
+A UI library is chosen when the project is created, as an overlay: the project template repository holds one overlay per framework and library (`next-antd`, `next-mui`, `next-heroui`, `vite-antd`, `vite-mui`, `vite-heroui`). Extracting it over a fresh copy of this template and running `pnpm install` replaces the files it needs, including `UiProvider.tsx`, and brings the library's `useNotification`, theme, documents and tests. An overlay is never applied to a project already in development.
+
+For a project that is already past creation, or a library with no overlay, add the library by hand, choosing one library for the whole app, in one change:
+
+1. Put the library's provider in `UiProvider.tsx`. `AppProviders.tsx` already composes it outside `QueryProvider`.
 2. Add the notification hook described below.
-3. Put theme values in `src/shared/styles/theme.ts`, not repeated per component.
+3. Keep `theme.ts` as the one source: keep its `palette`, `radius` and `fontFamily`, and build the library's own theme config from them in the same file.
 4. Rewrite this page to name the library and its rules, and update `docs/styles.md` and `docs/components/README.md` to match.
 
 ## The notification rule

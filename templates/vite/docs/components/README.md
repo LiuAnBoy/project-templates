@@ -8,9 +8,11 @@
 | --------------- | ------------------------------- | ------------------------------------------- | -------------------------------------- |
 | `http`          | `shared/http/http.ts`           | 唯一的 API 入口，回傳解開 envelope 後的資料 | [http-client.md](./http-client.md)     |
 | `useMediaQuery` | `shared/hooks/useMediaQuery.ts` | 追蹤 CSS media query 是否符合               | [useMediaQuery.md](./useMediaQuery.md) |
+| `date`          | `shared/utils/date.ts`          | 日期處理物件，唯一匯入 dayjs 的檔案         | [date.md](./date.md)                   |
 
 ## 使用原則
 
 - 打 API 一律走 `http`，不直接用 `fetch` 或 `axios`。
 - 共用元件只收 props 與 callback，不呼叫模組的 hook。
-- 此範本沒有 UI 元件庫，也就沒有通知 hook；加入元件庫時依 [../rules/ui.md](../rules/ui.md) 補上。
+- 此範本沒有 UI 元件庫，也就沒有通知 hook；元件庫在建立專案時以 overlay 選定，細節見 [../rules/ui.md](../rules/ui.md)。
+- 日期一律走 `date`，不直接匯入 `dayjs`。

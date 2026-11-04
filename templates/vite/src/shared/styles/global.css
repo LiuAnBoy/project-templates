@@ -1,15 +1,14 @@
+/* Every value comes from the variables that shared/styles/theme.ts publishes. */
 :root {
-  color-scheme: light dark;
-  font-family:
-    system-ui,
-    -apple-system,
-    'Segoe UI',
-    sans-serif;
+  color-scheme: light;
   line-height: 1.5;
 }
 
 body {
   margin: 0;
+  background: var(--theme-background);
+  color: var(--theme-text);
+  font-family: var(--theme-font-family);
 }
 
 .page {

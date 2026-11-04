@@ -1,21 +1,15 @@
 # Web app
 
-Stack: Next.js 16 (App Router), React 19, TanStack React Query 5, axios, TypeScript 6, Vitest + Playwright, ESLint 10 + Prettier, pnpm. UI library: see `docs/rules/ui.md`.
-
 The rules in `docs/rules/` govern all new code here. Read this file, then the pages that the table below names for your task, before the first edit. Where a page and your habit disagree, the page wins.
-
-## Commands
-
-- `pnpm dev` starts the app on port 3000 and forwards `/api/v1` to the API on port 8000 (`API_HOST` overrides it).
-- `pnpm lint`, `pnpm format:check` (fix with `pnpm format`), `pnpm typecheck`, `pnpm test`, `pnpm test:e2e`.
-- `pnpm build` and `pnpm start` are for the release pipeline. Do not run a production build while developing.
 
 ## Always-rules
 
-- Three layers: `src/app/` (thin routes), `src/modules/<feature>/` and `src/shared/`. Imports run one way and `shared/` never imports `modules/`.
+- Three layers: `src/app/` (routing and the root), `src/modules/<feature>/` and `src/shared/`. Imports run one way and `shared/` never imports `modules/`.
 - All HTTP goes through `http` from `src/shared/http/http.ts`. Never raw `fetch`, and never `axios` imported anywhere else.
 - Server state is React Query over module api functions. Hooks do no UI side effects.
-- User feedback goes through one shared notification hook once a UI library is added; the rule is in `docs/rules/ui.md`.
+- Every wire key is snake_case; api functions and types keep items in the wire shape (`docs/rules/data-layer.md`).
+- Dates go only through the `date` object of `src/shared/utils/date.ts`, the one file that imports `dayjs`.
+- Every site-wide colour, font, radius and spacing value comes from `src/shared/styles/theme.ts`; no hex or font literal in modules or shared components.
 - Use the `@/*` import alias, strict TypeScript, JSDoc on exported functions, English comments.
 - Tests live in a `tests/` folder next to the code they cover, never beside the source file.
 - A new shared component gets its page in `docs/components/` and an index entry in the same change.
@@ -44,7 +38,23 @@ The rules in `docs/rules/` govern all new code here. Read this file, then the pa
 1. Read the pages above for the task.
 2. Create `src/modules/<feature>/` on the shape of `src/modules/home/`: `components/`, `hooks/`, `api/`, `types/`, `tests/` and `index.ts`, creating each folder when its first file is written.
 3. Write the api functions and the key factory over `http`, then the query and mutation hooks (`docs/rules/data-layer.md`).
-4. Add the route under `src/app/` as a thin file that renders one module component.
+4. Add the route the way the Routing section below describes.
 5. Add tests in the module's `tests/` folder (`docs/rules/testing.md`); add a Playwright spec when the feature is a user journey.
 6. Record what shipped in the Traditional Chinese docs: the index in `docs/README.md`, and a page plus index entry in `docs/components/` for each new shared piece.
 7. Run `pnpm lint`, `pnpm format:check`, `pnpm typecheck`, `pnpm test` (and `pnpm test:e2e` for a journey).
+
+## Stack and commands
+
+Stack: Next.js 16 (App Router), React 19, TanStack React Query 5, axios, TypeScript 6, Vitest + Playwright, ESLint 10 + Prettier, pnpm.
+
+- `pnpm dev` starts the app on port 3000 and forwards `/api/v1` to the API on port 8000 (`API_HOST` overrides it).
+- `pnpm lint`, `pnpm format:check` (fix with `pnpm format`), `pnpm typecheck`, `pnpm test`, `pnpm test:e2e`.
+- `pnpm build` and `pnpm start` are for the release pipeline. Do not run a production build while developing.
+
+## Routing
+
+`src/app/` holds thin routes. A route file reads params and renders one module component; add a feature's route as a thin file there.
+
+## UI: none
+
+This project has no UI library. A UI library is chosen when the project is created, as an overlay; the rules for adding one by hand are in `docs/rules/ui.md`. Without a library there is no `useNotification`, and a component that must tell the user something renders the message itself.

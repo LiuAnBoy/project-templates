@@ -67,9 +67,28 @@ function fixture() {
     `export const recipes = {
   ab: ['source/a', 'source/b'],
   ba: ['source/b', 'source/a'],
+  withplain: ['source/a', 'source/ui/plain'],
   broken: ['source/a', 'source/nope'],
   nofrag: ['source/c'],
+};
+export const overlays = {
+  over: { base: 'ab', layers: ['source/o'] },
 };\n`,
+  );
+  put(path.join(root, 'source/o/shared.txt'), 'from overlay\n');
+  put(path.join(root, 'source/o/only-o.txt'), 'o\n');
+  put(path.join(root, 'source/a/AGENTS.fragment.md'), '# Doc\n\nblock a\n');
+  put(path.join(root, 'source/b/AGENTS.fragment.md'), '## B\n\nblock b\n\n\n');
+  put(path.join(root, 'source/o/AGENTS.fragment.md'), '## O\n\nblock o\n');
+  put(path.join(root, 'source/ui/plain/AGENTS.fragment.md'), '## Plain\n\nno library\n');
+  put(path.join(root, 'source/o/nested/deep.txt'), 'deep\n');
+  put(
+    path.join(root, 'source/o/package.fragment.json'),
+    JSON.stringify({
+      name: 'overlay-name',
+      scripts: { lint: 'o-lint' },
+      dependencies: { omega: '3.0.0' },
+    }),
   );
   put(path.join(root, 'source/c/file.txt'), 'c\n');
   return { root, recipes };
@@ -204,6 +223,102 @@ test('an unknown --only name fails', () => {
   const result = render(fx, ['--only', 'ab,zzz']);
   assert.notEqual(result.code, 0);
   assert.match(result.out, /zzz/);
+});
+
+test('an overlay holds only its own files and the merged package.json of its base', () => {
+  const fx = fixture();
+  assert.equal(render(fx, ['--only', 'over']).code, 0);
+  const dir = path.join(fx.root, 'overlays/over');
+  assert.equal(fs.readFileSync(path.join(dir, 'shared.txt'), 'utf8'), 'from overlay\n');
+  assert.equal(fs.existsSync(path.join(dir, 'only-o.txt')), true);
+  assert.equal(fs.existsSync(path.join(dir, 'nested/deep.txt')), true);
+  // Files of the base layers are not copied into the overlay.
+  assert.equal(fs.existsSync(path.join(dir, 'only-a.txt')), false);
+  assert.equal(fs.existsSync(path.join(dir, 'only-b.txt')), false);
+  assert.equal(fs.existsSync(path.join(dir, 'package.fragment.json')), false);
+  assert.equal(fs.existsSync(path.join(fx.root, 'templates/over')), false);
+  const pkg = JSON.parse(fs.readFileSync(path.join(dir, 'package.json'), 'utf8'));
+  // Named after the base, never after the overlay, and a full manifest.
+  assert.equal(pkg.name, 'ab');
+  assert.deepEqual(pkg.scripts, { lint: 'o-lint', test: 'a-test' });
+  assert.deepEqual(Object.keys(pkg.dependencies), ['alpha', 'beta', 'omega', 'zeta']);
+  assert.deepEqual(pkg.list, ['b1', 'b2']);
+});
+
+test('AGENTS.md is joined from fragments in layer order and fragments are not copied', () => {
+  const fx = fixture();
+  assert.equal(render(fx, ['--only', 'ab,ba']).code, 0);
+  const read = (n) => fs.readFileSync(path.join(fx.root, 'templates', n, 'AGENTS.md'), 'utf8');
+  assert.equal(read('ab'), '# Doc\n\nblock a\n\n## B\n\nblock b\n');
+  assert.equal(read('ba'), '## B\n\nblock b\n\n# Doc\n\nblock a\n');
+  assert.equal(fs.existsSync(path.join(fx.root, 'templates/ab/AGENTS.fragment.md')), false);
+  // A layer with no fragment adds nothing, and without any fragment nothing is generated.
+  assert.equal(render(fx, ['--only', 'nofrag']).code, 0);
+  assert.equal(fs.existsSync(path.join(fx.root, 'templates/nofrag/AGENTS.md')), false);
+});
+
+test('an overlay AGENTS.md is the whole file: base blocks without the plain block, plus its own', () => {
+  const fx = fixture();
+  fs.appendFileSync(fx.recipes, "recipes.ab = ['source/a', 'source/b', 'source/ui/plain'];\n");
+  assert.equal(render(fx, ['--only', 'ab,over']).code, 0);
+  const base = fs.readFileSync(path.join(fx.root, 'templates/ab/AGENTS.md'), 'utf8');
+  assert.match(base, /no library/);
+  const over = fs.readFileSync(path.join(fx.root, 'overlays/over/AGENTS.md'), 'utf8');
+  assert.equal(over, '# Doc\n\nblock a\n\n## B\n\nblock b\n\n## O\n\nblock o\n');
+});
+
+test('--check catches a hand-edited generated AGENTS.md', () => {
+  const fx = fixture();
+  render(fx, ['--only', 'ab']);
+  put(path.join(fx.root, 'templates/ab/AGENTS.md'), 'edited by hand\n');
+  const result = render(fx, ['--check', '--only', 'ab']);
+  assert.notEqual(result.code, 0);
+  assert.match(result.out, /changed file: AGENTS\.md/);
+});
+
+test('an overlay keeps its lockfile and drops stale files', () => {
+  const fx = fixture();
+  const dir = path.join(fx.root, 'overlays/over');
+  put(path.join(dir, 'pnpm-lock.yaml'), 'overlay-lock\n');
+  put(path.join(dir, 'stale.txt'), 'old\n');
+  assert.equal(render(fx, ['--only', 'over']).code, 0);
+  assert.equal(fs.readFileSync(path.join(dir, 'pnpm-lock.yaml'), 'utf8'), 'overlay-lock\n');
+  assert.equal(fs.existsSync(path.join(dir, 'stale.txt')), false);
+});
+
+test('a template and an overlay render together', () => {
+  const fx = fixture();
+  const result = render(fx, ['--only', 'ab,over']);
+  assert.equal(result.code, 0, result.out);
+  assert.equal(fs.existsSync(path.join(fx.root, 'templates/ab/package.json')), true);
+  assert.equal(fs.existsSync(path.join(fx.root, 'overlays/over/package.json')), true);
+});
+
+test('--check covers overlays: fresh render passes, edits and a missing directory fail', () => {
+  const fx = fixture();
+  render(fx, ['--only', 'over']);
+  put(path.join(fx.root, 'overlays/over/pnpm-lock.yaml'), 'ignored\n');
+  assert.equal(render(fx, ['--check', '--only', 'over']).code, 0);
+
+  put(path.join(fx.root, 'overlays/over/only-o.txt'), 'edited\n');
+  put(path.join(fx.root, 'overlays/over/extra.txt'), 'x\n');
+  const changed = render(fx, ['--check', '--only', 'over']);
+  assert.notEqual(changed.code, 0);
+  assert.match(changed.out, /changed file: only-o\.txt/);
+  assert.match(changed.out, /extra file: extra\.txt/);
+
+  fs.rmSync(path.join(fx.root, 'overlays/over'), { recursive: true });
+  const missing = render(fx, ['--check', '--only', 'over']);
+  assert.notEqual(missing.code, 0);
+  assert.match(missing.out, /directory missing/);
+});
+
+test('an overlay with an unknown base fails', () => {
+  const fx = fixture();
+  fs.appendFileSync(fx.recipes, "overlays.lost = { base: 'zzz', layers: ['source/o'] };\n");
+  const result = render(fx, ['--only', 'over']);
+  assert.notEqual(result.code, 0);
+  assert.match(result.out, /unknown base "zzz"/);
 });
 
 let failed = 0;

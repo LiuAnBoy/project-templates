@@ -4,15 +4,16 @@
 
 ## 技術棧
 
-| 項目       | 內容                                        |
-| ---------- | ------------------------------------------- |
-| 框架       | Next.js 16（App Router）、React 19          |
-| 伺服器狀態 | TanStack React Query 5                      |
-| HTTP       | axios，僅在 `src/shared/http/http.ts` 使用  |
-| 語言與檢查 | TypeScript 6（strict）、ESLint 10、Prettier |
-| 測試       | Vitest + Testing Library、Playwright        |
-| 套件管理   | pnpm                                        |
-| UI 元件庫  | 見 [rules/ui.md](./rules/ui.md)             |
+| 項目       | 內容                                            |
+| ---------- | ----------------------------------------------- |
+| 框架       | Next.js 16（App Router）、React 19              |
+| 伺服器狀態 | TanStack React Query 5                          |
+| HTTP       | axios，僅在 `src/shared/http/http.ts` 使用      |
+| 日期       | dayjs，僅在 `src/shared/utils/date.ts` 使用     |
+| 語言與檢查 | TypeScript 6（strict）、ESLint 10、Prettier     |
+| 測試       | Vitest + Testing Library、Playwright            |
+| 套件管理   | pnpm                                            |
+| UI 元件庫  | 建立專案時選定，見 [rules/ui.md](./rules/ui.md) |
 
 ## 指令
 
@@ -38,14 +39,19 @@ src/
   modules/home/   首頁模組（components、tests、index.ts）
   shared/
     http/         HTTP 封裝、錯誤型別與測試
-    hooks/        useMediaQuery
-    providers/    AppProviders、QueryProvider
-    styles/       global.css
+    hooks/        共用 hook（清單見 components/README.md）
+    providers/    AppProviders、QueryProvider、UiProvider
+    styles/       theme.ts（全站樣式的唯一來源）與 global.css（見 styles.md）
+    utils/        date.ts：日期處理物件，唯一匯入 dayjs 的檔案
   test/setup.ts   Vitest 設定
 tests/e2e/        Playwright 規格
 ```
 
 完整的目標結構與分層規則見 [rules/architecture.md](./rules/architecture.md)。
+
+## 公開網站與後台
+
+預設是一個專案，公開網站取名 `web`，後台取名 `dashboard`，兩者共用同一個專案。目前只有一個首頁，沒有第二個路由或版面。需要時的做法，以及何時改成在 `web/` 旁邊另建 `dashboard/`，見 [rules/architecture.md](./rules/architecture.md)〈Serving a public site and a dashboard from one project〉。
 
 ## 認證
 

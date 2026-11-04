@@ -1,0 +1,20 @@
+# 共用元件索引
+
+新增頁面或功能前，先在這裡找現成的共用元件與 hook，不要重造。新增共用元件時，在同一次變更中補上文件頁，並把它加進下表。
+
+## 清單
+
+| 名稱              | 位置                              | 用途                                        | 文件                                       |
+| ----------------- | --------------------------------- | ------------------------------------------- | ------------------------------------------ |
+| `http`            | `shared/http/http.ts`             | 唯一的 API 入口，回傳解開 envelope 後的資料 | [http-client.md](./http-client.md)         |
+| `useMediaQuery`   | `shared/hooks/useMediaQuery.ts`   | 追蹤 CSS media query 是否符合               | [useMediaQuery.md](./useMediaQuery.md)     |
+| `date`            | `shared/utils/date.ts`            | 日期處理物件，唯一匯入 dayjs 的檔案         | [date.md](./date.md)                       |
+| `useNotification` | `shared/hooks/useNotification.ts` | 通知，底層是 notistack 的 snackbar          | [useNotification.md](./useNotification.md) |
+
+## 使用原則
+
+- 打 API 一律走 `http`，不直接用 `fetch` 或 `axios`。
+- 使用者回饋一律走 `useNotification`，不直接呼叫 notistack 的 `enqueueSnackbar`。
+- 日期一律走 `date`，不直接匯入 `dayjs`。
+- 共用元件只收 props 與 callback，不呼叫模組的 hook。
+- UI 元件直接用 MUI，設計值放在 [../styles.md](../styles.md) 說明的 `theme`。

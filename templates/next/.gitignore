@@ -18,3 +18,6 @@ playwright-report/
 test-results/
 
 .DS_Store
+
+# local work notes
+todos/

@@ -1,12 +1,13 @@
 #!/usr/bin/env node
 /**
- * Renders the standalone templates under `templates/` from the layers in
- * `source/`, following the recipes in `scripts/recipes.mjs`.
+ * Renders the standalone templates under `templates/` and the UI overlays
+ * under `overlays/` from the layers in `source/`, following the recipes in
+ * `scripts/recipes.mjs`.
  *
  * Usage:
- *   node scripts/render.mjs                    render all templates
- *   node scripts/render.mjs --only a,b         render only the named templates
- *   node scripts/render.mjs --check            compare a fresh render to templates/
+ *   node scripts/render.mjs                    render all templates and overlays
+ *   node scripts/render.mjs --only a,b         render only the named ones
+ *   node scripts/render.mjs --check            compare a fresh render to the committed output
  *   Options: --root <dir> (repository root), --recipes <file> (recipes module)
  *
  * Rules:
@@ -15,6 +16,14 @@
  *     and scalars are replaced by the later layer) into a generated
  *     package.json whose `name` is the template name. Fragments are never
  *     copied. A template with no fragment gets no package.json.
+ *   - A layer may hold AGENTS.fragment.md. When any layer does, the fragments
+ *     are concatenated in layer order, one blank line apart, into the generated
+ *     AGENTS.md; fragments are never copied. With no fragment, a layer's own
+ *     AGENTS.md is copied like any file.
+ *   - An overlay (recipes `overlays` export: {base, layers}) copies only its own
+ *     layers, but its package.json merges the fragments of its base template's
+ *     layers and its own, and is named after the base so the project can extend
+ *     it as its own.
  *   - Existing root pnpm-lock.yaml and uv.lock in the target are preserved.
  *   - --check ignores those lockfiles and build leftovers listed in IGNORED.
  */
@@ -24,6 +33,7 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const FRAGMENT = 'package.fragment.json';
+const AGENTS_FRAGMENT = 'AGENTS.fragment.md';
 const LOCKFILES = ['pnpm-lock.yaml', 'uv.lock'];
 const IGNORED = new Set([
   '.DS_Store',
@@ -116,23 +126,48 @@ export function buildPackageJson(name, layerDirs) {
 }
 
 /**
- * Render one template into `outDir`, replacing its content but keeping the
- * root lockfiles that already exist there.
+ * Join the AGENTS.fragment.md files of the layers, in order.
+ *
+ * @param {string[]} layerDirs Absolute layer directories in order.
+ * @returns {string | null} The document, or null when no layer has a fragment.
+ */
+export function buildAgentsMd(layerDirs) {
+  const parts = [];
+  for (const dir of layerDirs) {
+    const file = path.join(dir, AGENTS_FRAGMENT);
+    if (!fs.existsSync(file)) continue;
+    parts.push(fs.readFileSync(file, 'utf8').trim());
+  }
+  return parts.length === 0 ? null : `${parts.join('\n\n')}\n`;
+}
+
+/**
+ * Render one template or overlay into `outDir`, replacing its content but
+ * keeping the root lockfiles that already exist there.
  *
  * @param {string} root Repository root.
- * @param {string} name Template name.
- * @param {string[]} layers Layer paths relative to root.
+ * @param {string} name Target name, used in error messages.
+ * @param {string[]} layers Layer paths relative to root whose files are copied.
  * @param {string} outDir Absolute target directory.
+ * @param {{packageName?: string, fragmentLayers?: string[], agentsLayers?: string[]}} [options]
+ *   `packageName` is the generated package name (default `name`);
+ *   `fragmentLayers` are the layers whose package fragments are merged (default `layers`);
+ *   `agentsLayers` are the layers whose AGENTS fragments are joined (default `fragmentLayers`).
  * @returns {void}
  * @throws {Error} When a layer directory does not exist.
  */
-export function renderTemplate(root, name, layers, outDir) {
+export function renderTemplate(root, name, layers, outDir, options = {}) {
+  const packageName = options.packageName ?? name;
+  const fragmentLayers = options.fragmentLayers ?? layers;
   const layerDirs = layers.map((layer) => path.resolve(root, layer));
-  for (const [index, dir] of layerDirs.entries()) {
+  const fragmentDirs = fragmentLayers.map((layer) => path.resolve(root, layer));
+  const agentsLayers = options.agentsLayers ?? fragmentLayers;
+  const agentsDirs = agentsLayers.map((layer) => path.resolve(root, layer));
+  const wanted = [...new Set([...layers, ...fragmentLayers, ...agentsLayers])];
+  for (const layer of wanted) {
+    const dir = path.resolve(root, layer);
     if (!fs.existsSync(dir) || !fs.statSync(dir).isDirectory()) {
-      throw new Error(
-        `template "${name}": layer directory missing: ${layers[index]}`,
-      );
+      throw new Error(`template "${name}": layer directory missing: ${layer}`);
     }
   }
 
@@ -144,12 +179,14 @@ export function renderTemplate(root, name, layers, outDir) {
         force: true,
         filter: (src) => {
           const base = path.basename(src);
-          return base !== FRAGMENT && base !== '.DS_Store';
+          return base !== FRAGMENT && base !== AGENTS_FRAGMENT && base !== '.DS_Store';
         },
       });
     }
-    const pkg = buildPackageJson(name, layerDirs);
+    const pkg = buildPackageJson(packageName, fragmentDirs);
     if (pkg !== null) fs.writeFileSync(path.join(staging, 'package.json'), pkg);
+    const agents = buildAgentsMd(agentsDirs);
+    if (agents !== null) fs.writeFileSync(path.join(staging, 'AGENTS.md'), agents);
 
     const kept = new Map();
     for (const lock of LOCKFILES) {
@@ -263,21 +300,53 @@ async function main(argv) {
   const here = path.dirname(fileURLToPath(import.meta.url));
   const root = path.resolve(opts.root ?? path.join(here, '..'));
   const recipesFile = path.resolve(opts.recipes ?? path.join(here, 'recipes.mjs'));
-  const { recipes } = await import(pathToFileURL(recipesFile).href);
+  const { recipes, overlays = {} } = await import(pathToFileURL(recipesFile).href);
 
-  const names = opts.only ?? Object.keys(recipes);
+  /** @type {Record<string, {dir: string, layers: string[], options: object}>} */
+  const targets = {};
+  for (const [name, layers] of Object.entries(recipes)) {
+    targets[name] = { dir: 'templates', layers, options: {} };
+  }
+  for (const [name, overlay] of Object.entries(overlays)) {
+    if (name in targets) throw new Error(`overlay "${name}" has the name of a template`);
+    const baseLayers = recipes[overlay.base];
+    if (!baseLayers) throw new Error(`overlay "${name}": unknown base "${overlay.base}"`);
+    targets[name] = {
+      dir: 'overlays',
+      layers: overlay.layers,
+      options: {
+        packageName: overlay.base,
+        fragmentLayers: [...baseLayers, ...overlay.layers],
+        // The base's blocks without the no-library block, so the result is the whole file.
+        agentsLayers: [
+          ...baseLayers.filter((layer) => layer !== 'source/ui/plain'),
+          ...overlay.layers,
+        ],
+      },
+    };
+  }
+
+  const names = opts.only ?? Object.keys(targets);
   if (names.length === 0) throw new Error('--only selected no template');
-  const unknown = names.filter((name) => !(name in recipes));
+  const unknown = names.filter((name) => !(name in targets));
   if (unknown.length > 0) {
     throw new Error(
-      `unknown template(s): ${unknown.join(', ')} (known: ${Object.keys(recipes).join(', ')})`,
+      `unknown template(s): ${unknown.join(', ')} (known: ${Object.keys(targets).join(', ')})`,
     );
   }
 
-  const templatesDir = path.join(root, 'templates');
+  /**
+   * Absolute committed output directory of a target.
+   *
+   * @param {string} name Target name.
+   * @returns {string} Directory under templates/ or overlays/.
+   */
+  const outputOf = (name) => path.join(root, targets[name].dir, name);
+
   if (!opts.check) {
     for (const name of names) {
-      renderTemplate(root, name, recipes[name], path.join(templatesDir, name));
+      const { layers, options } = targets[name];
+      renderTemplate(root, name, layers, outputOf(name), options);
       console.log(`rendered ${name}`);
     }
     return 0;
@@ -288,8 +357,8 @@ async function main(argv) {
   try {
     for (const name of names) {
       const fresh = path.join(scratch, name);
-      renderTemplate(root, name, recipes[name], fresh);
-      const problems = diffDirs(fresh, path.join(templatesDir, name));
+      renderTemplate(root, name, targets[name].layers, fresh, targets[name].options);
+      const problems = diffDirs(fresh, outputOf(name));
       if (problems.length === 0) console.log(`ok ${name}`);
       else {
         failed = true;

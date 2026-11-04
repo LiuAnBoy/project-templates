@@ -19,14 +19,14 @@ src/
     components/             reusable UI, indexed in docs/components/README.md
     hooks/                  hooks with no feature knowledge (useMediaQuery)
     http/                   the axios wrapper, its error types and tests
-    providers/              AppProviders, QueryProvider
-    styles/                 global stylesheet
+    providers/              AppProviders, QueryProvider, UiProvider (the UI library slot)
+    styles/                 theme.ts (the one source of site-wide style values) and the global stylesheet
     utils/                  pure helpers
   test/setup.ts             Vitest setup
 tests/e2e/                  Playwright specs
 ```
 
-A folder exists only when it holds a file; the tree above is the target shape, and a folder is created when its first file is. Today `modules/home/` holds `components/`, `tests/` and `index.ts`, and `shared/` holds `http/`, `hooks/`, `providers/` and `styles/`.
+A folder exists only when it holds a file; the tree above is the target shape, and a folder is created when its first file is. Today `modules/home/` holds `components/`, `tests/` and `index.ts`, and `shared/` holds `http/`, `hooks/`, `providers/`, `styles/` and `utils/`.
 
 Why: a feature is deleted or moved as one folder, and a reader finds a thing by asking which feature owns it.
 
@@ -55,7 +55,7 @@ Why: a feature is deleted or moved as one folder, and a reader finds a thing by 
 ### Routes and components
 
 - `app/page.tsx` is a server component that renders one module component. Metadata (`metadata` or `generateMetadata`) is exported from the page or the root layout.
-- Route groups separate audiences, for example `(public)` and `(dashboard)`, each with its own `layout.tsx`. Why: a layout per audience carries its own chrome (header, navigation) without conditionals. A layout is chrome only; it never decides who may see a page.
+- Route groups separate audiences, for example `(web)` and `(dashboard)`, each with its own `layout.tsx`. Why: a layout per audience carries its own chrome (header, navigation) without conditionals. A layout is chrome only; it never decides who may see a page.
 - Default to server components. Add `'use client'` only to the file that needs state, effects, browser APIs or a client-only library, and keep that file small. Why: every client boundary ships its imports to the browser.
 - Providers are client components composed in `shared/providers/AppProviders.tsx` and mounted once in `app/layout.tsx`. Add a provider to `AppProviders`, never beside it.
 - React Query hooks from `modules/*/hooks` are client-only. A server component fetches through the same api function, because `shared/http/base-url.ts` resolves the base to an absolute URL on the server (`API_HOST`, default `http://localhost:8000`, plus `/api/v1`) and keeps it relative in the browser; or it passes initial data to a client component. Server-side calls do not carry the browser's token: pass what the call needs explicitly.
@@ -73,7 +73,8 @@ The browser calls `/api/v1` on its own origin and `next.config.ts` forwards it t
 
 ### Styles and assets
 
-- `shared/styles/global.css` is imported by `app/layout.tsx`. See `docs/styles.md`.
+- `shared/styles/global.css` is imported by `app/layout.tsx` and reads the CSS variables that `ThemeVariables` publishes from `theme.ts`.
+- Every site-wide colour, font, radius and spacing value comes from `shared/styles/theme.ts`, the one source of the whole site's style. No hex colour or font literal appears in `modules/` or in shared components. A top-level `src/styles/` is not used; `shared/styles/` keeps the three layers. See `docs/styles.md`.
 - Use `next/image` for content images and `next/font` for fonts.
 
 ### Environment
@@ -83,6 +84,15 @@ Copy `.env.example` to `.env` to change `API_HOST` (build time for the rewrite, 
 ### Generated files
 
 `next-env.d.ts` and `.next/` are generated and gitignored. `pnpm typecheck` runs `next typegen` first, so a fresh clone typechecks without running the dev server.
+
+## Serving a public site and a dashboard from one project
+
+The default names are `web` for the public site and `dashboard` for the signed-in area. The template ships neither a second route nor a second layout; add them when the product needs them.
+
+- Use route groups `app/(web)/` and `app/(dashboard)/`, each with its own `layout.tsx` that carries chrome only (header, navigation). Do not use other example names such as `(public)`.
+- A layout never decides who may see a page. Access is checked in `proxy.ts` and again at the data access, as the steps in "Authentication is not included" say.
+- Modules stay under `modules/<feature>/`; a route file of either group renders one module component.
+- A separate `dashboard/` app beside `web/` is created with `monorepo.sh <project> <web> <ui> <server> --dashboard <next|vite> <plain|antd|mui|heroui>`. Choose it when the frameworks or the deployment differ, when the dashboard needs its own domain or an intranet, or when the public site must not carry the dashboard's UI weight. One app stays the default.
 
 ## Authentication is not included
 

@@ -87,3 +87,11 @@ Everything that came from the server and can be refetched is a query, never a co
 ## Forms
 
 Validate with the same zod schema the backend uses when the `@app/contract` package is present (it is, in a monorepo); otherwise keep one schema per form beside the component. Submit through a mutation hook and show the server's `message` through `getErrorMessage`.
+
+## Dates
+
+`src/shared/utils/date.ts` is the only file that imports `dayjs`. Everything else imports the `date` object from it (`date.format`, `date.formatDateTime`, `date.fromNow`, `date.parse`) and a new date need becomes a new method there. Never import `dayjs` anywhere else, and never use `moment`, `date-fns` or hand-written `toLocaleString` formatting for values shown to the user. Why: the locale, the formats and the plugin set live in one place, and a library swap touches one file.
+
+## Wire format
+
+Every key on the wire is snake_case, in requests and in responses, and the database is snake_case as well; camelCase never appears in the API or the database. Api functions and their types keep items in the wire shape (`created_at`, not `createdAt`). The only camelCased fields are the paging fields that `http.list` returns (`items`, `page`, `pageSize`, `totalCount`). Why: one spelling end to end means no mapping layer to keep in step with the server.

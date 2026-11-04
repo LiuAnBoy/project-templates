@@ -23,14 +23,14 @@ src/
     components/             reusable UI, indexed in docs/components/README.md
     hooks/                  hooks with no feature knowledge (useMediaQuery)
     http/                   the axios wrapper, its error types and tests
-    providers/              AppProviders, QueryProvider
-    styles/                 global stylesheet
+    providers/              AppProviders, QueryProvider, UiProvider (the UI library slot)
+    styles/                 theme.ts (the one source of site-wide style values) and the global stylesheet
     utils/                  pure helpers
   test/setup.ts             Vitest setup
 tests/e2e/                  Playwright specs
 ```
 
-A folder exists only when it holds a file; the tree above is the target shape, and a folder is created when its first file is. Today `modules/home/` holds `components/`, `tests/`, `routes.tsx` and `index.ts`, and `shared/` holds `http/`, `hooks/`, `providers/` and `styles/`.
+A folder exists only when it holds a file; the tree above is the target shape, and a folder is created when its first file is. Today `modules/home/` holds `components/`, `tests/`, `routes.tsx` and `index.ts`, and `shared/` holds `http/`, `hooks/`, `providers/`, `styles/` and `utils/`.
 
 Why: a feature is deleted or moved as one folder, and a reader finds a thing by asking which feature owns it.
 
@@ -77,6 +77,20 @@ The browser calls `/api/v1` on its own origin. `vite.config.ts` forwards `/api` 
 ### Environment
 
 Copy `.env.example` to `.env` to change `API_HOST`, which only the dev and preview proxy read. Values the browser needs are `VITE_`-prefixed variables and are public by nature; never put a secret in one. `.env` is gitignored.
+
+### Styles
+
+- `shared/styles/global.css` is imported by `src/main.tsx` and reads the CSS variables that `ThemeVariables` publishes from `theme.ts`.
+- Every site-wide colour, font, radius and spacing value comes from `shared/styles/theme.ts`, the one source of the whole site's style. No hex colour or font literal appears in `modules/` or in shared components. A top-level `src/styles/` is not used; `shared/styles/` keeps the three layers. See `docs/styles.md`.
+
+## Serving a public site and a dashboard from one project
+
+The default names are `web` for the public site and `dashboard` for the signed-in area. The template ships neither a second route nor a second layout; add them when the product needs them.
+
+- Nest the routes under two layout routes, `web` and `dashboard`, each rendering its own chrome and an `Outlet`. Each module exports its own route array, and `app/router.tsx` spreads the arrays under the right layout.
+- Load the dashboard routes with `React.lazy` so the dashboard ships as its own chunk and the public pages do not download it.
+- Dashboard code still reaches the browser, as any chunk does. A layout or a route guard only shapes the screen, so the API must enforce every permission.
+- A separate `dashboard/` app beside `web/` is created with `monorepo.sh <project> <web> <ui> <server> --dashboard <next|vite> <plain|antd|mui|heroui>`. Choose it when the frameworks or the deployment differ, when the dashboard needs its own domain or an intranet, or when the public site must not carry the dashboard's UI weight. One app stays the default.
 
 ## Authentication is not included
 

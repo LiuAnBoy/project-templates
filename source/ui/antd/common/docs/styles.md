@@ -1,0 +1,15 @@
+# 樣式
+
+此專案使用 Ant Design 6，樣式由 antd 的 CSS-in-JS 產生，沒有 Tailwind 之類的樣式框架。
+
+## 目前的樣式
+
+- `src/shared/styles/theme.ts` 是全站樣式的唯一來源：先是 `palette`（primary、background、surface、text、textSecondary、border）、`radius`、`fontFamily` 與 `cssVariables`，再由它們組出 `appTheme`（antd 的 `ThemeConfig`，token 包含 `colorPrimary`、`colorBgBase`、`colorTextBase`、`colorTextHeading`、`colorBorder`、`borderRadius`、`fontFamily`）。要改設計值就改這裡，不要用全域 CSS 覆蓋 antd 的 class，元件裡也不寫色碼。
+- `src/shared/providers/ThemeVariables.tsx` 把 `cssVariables` 以 `:root` 規則放進頁面，`global.css` 讀這些變數；沒有最上層的 `src/styles/`。
+- `src/shared/providers/UiProvider.tsx` 把 `appTheme` 與繁體中文語系 `zh_TW` 交給 `ConfigProvider`，再用 antd 的 `App` 包住整棵樹。
+- `src/shared/styles/global.css` 只有 `color-scheme`、`body` 的 margin、背景、文字顏色與字型（都讀變數），以及首頁置中用的 `.page`，在根 layout（Next.js 的 `app/layout.tsx`，或 Vite 的 `src/main.tsx`）載入一次。
+- 在 Next.js，`app/layout.tsx` 用 `@ant-design/nextjs-registry` 的 `AntdRegistry` 把首屏樣式放進伺服器輸出的 HTML，避免畫面先無樣式再閃動。這一層要留著；移除後頁面會在 hydration 前沒有 antd 樣式。
+
+## 驗證
+
+`tests/e2e/home.spec.ts` 檢查首頁標題的顏色與粗細是 `appTheme` 與 antd 樣式產生的值，證明 provider 與樣式有載入。在 Next.js，`tests/e2e/ssr.spec.ts` 關閉 JavaScript 後做同樣檢查，證明 `AntdRegistry` 有把樣式放進伺服器輸出。
