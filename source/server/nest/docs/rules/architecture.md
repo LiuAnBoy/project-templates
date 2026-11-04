@@ -66,7 +66,7 @@ Capabilities are added through ports and `createXxx(deps)` factories, connected 
 
 ## The infrastructure seam
 
-`src/infra/` is the one place that knows what the process depends on. `InfraModule` is global and exports two tokens: `DEPENDENCY_CHECKS`, the `DependencyCheck[]` that `HealthController` runs and that `main.ts` runs before `listen`, and `RATE_LIMIT_STORAGE`, the optional shared storage that `AppModule` passes to `createThrottlerOptions`. A project with no store provides no checks and no storage, so it starts as the base does. A data overlay replaces `infra.module.ts` and `infra-env.ts`, and nothing else changes.
+`src/infra/` is the one place that knows what the process depends on. `InfraModule` is global and exports two tokens: `DEPENDENCY_CHECKS`, the `DependencyCheck[]` that `HealthController` runs and that `main.ts` runs before `listen`, and `RATE_LIMIT_STORAGE`, the optional shared storage that `AppModule` passes to `createThrottlerOptions`. A project with no store provides no checks and no storage, so it starts as the base does. A data overlay replaces the files of `src/infra/` and adds its own folders (`src/db/`, `src/redis/`); no other file under `src/` changes.
 
 - Startup: after the application is built and before it listens, `main.ts` runs every check under `bounded()`; a failure closes the application and exits non-zero naming the check and never a value.
 - A dependency lost after startup answers 503 through `isDependencyOutage`; the process stays up. Each client's factory handles its own `error` events so a lost connection is logged once.
@@ -81,7 +81,7 @@ Shapes, the failure table and `AppError` are in `api-and-errors.md`. Controllers
 The request limit is on by default: `ThrottlerGuard` is a global `APP_GUARD` in `app.module.ts`, and `TRUST_PROXY` is read through the env schema, which rejects blanket-trust values, before `main.ts` builds the adapter (`api-and-errors.md`, Rate limiting). This template ships no authentication (see `api-and-errors.md`, Auth). When it is added:
 
 - Global `APP_GUARD`s in order: the throttler that is already there, then JWT auth (on by default, `@Public()` opts out), then an authorisation guard. The throttler comes first so that a flood of failed sign-ins is counted.
-- Allow the one configured web origin in CORS; `@fastify/helmet` is already registered in `bootstrap.ts`.
+- No CORS: the browser reaches the API same-origin through the web app's `/api/v1` proxy (`api-and-errors.md`, Auth). `@fastify/helmet` is already registered in `bootstrap.ts`.
 - With more than one instance, provide a shared storage as `RATE_LIMIT_STORAGE` in `InfraModule`.
 
 ## Data access

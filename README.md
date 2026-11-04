@@ -132,7 +132,7 @@ pnpm dev                                                 # FastAPI：make dev
 
 | 選擇 | 什麼時候用 |
 | ---- | ---------- |
-| `postgres` | 預設。專案自己有 PostgreSQL 服務，之後只改 `.env` 就能換到共用的伺服器 |
+| `postgres` | 專案自己有 PostgreSQL 服務，之後只改 `.env` 就能換到共用的伺服器 |
 | `sqlite` | 只有一個執行個體、不想多一個資料庫服務 |
 | `redis` | 只需要快取、鎖或佇列；沒有資料庫 |
 | `postgres,redis`、`sqlite,redis` | 資料庫加上 Redis；速率限制也改用 Redis 計數，讓多個執行個體共用同一個上限 |

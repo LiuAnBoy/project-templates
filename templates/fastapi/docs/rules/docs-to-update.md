@@ -22,6 +22,6 @@ This file says which of the project's own pages a kind of backend change must up
 - An API example shows the real envelope from `api-and-errors.md`, with fake data.
 - Language: `AGENTS.md` and everything under `docs/rules/` are English. Every other page under `docs/` (index, API, database, and any business page such as a workflow or a backlog) is Traditional Chinese.
 - Business pages (workflow, backlog, product rules) are not shipped. A project that needs one adds it under `docs/`, in Traditional Chinese, and links it from `docs/README.md`.
-- Docs and the schema go together: when the SQLAlchemy models or `migrations/` changes, the database page, the schema and the committed migration agree, and no applied migration is edited (`data.md`).
+- Docs and the schema go together: when the SQLAlchemy models or `alembic/versions/` changes, the database page, the schema and the committed migration agree, and no applied migration is edited (`data.md`).
 - A change that alters nothing a reader of these pages relies on (an internal refactor, a test) updates no page; say so in the report rather than touching docs for form.
 - Never put a host, port, credential or token in a page; point to where the real value lives (the env file, the secret store).

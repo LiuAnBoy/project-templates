@@ -44,7 +44,7 @@ class DatabaseSettings(BaseSettings):
     Attributes:
         database_url: The path of the database file, relative to the directory the
             server starts in. The file must already exist: only ``make db-migrate``
-            creates it.
+            and ``make db-generate`` create it.
     """
 
     model_config = SettingsConfigDict(

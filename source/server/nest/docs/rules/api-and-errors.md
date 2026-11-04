@@ -134,5 +134,6 @@ After those steps, authentication is on by default and enforced once, above ever
 - Refresh tokens are stored as a digest, never raw, and rotate on every use. A rotated token presented again is treated as theft and revokes its whole family.
 - Authorisation is checked in one place (a guard or a policy function), not scattered through handlers.
 - Rate limiting is already on (see Rate limiting). With more than one instance, give it the shared storage (Redis) and set `TRUST_PROXY` to the proxies in front; never trust all proxies, because a blanket value lets any caller forge `X-Forwarded-For`.
-- CORS allows the one web origin from config, never `*` with credentials. Security headers are already registered (`@fastify/helmet`).
+- There is no CORS: the browser reaches the API same-origin through the web app's `/api/v1` proxy, so the server sets no CORS header. A cross-origin caller is a design change that allows one configured origin, never `*` with credentials.
+- Security headers are already registered (`@fastify/helmet`).
 - Secrets and tokens are never logged. Webhook receivers verify a signature over the raw body before parsing it.

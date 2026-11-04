@@ -51,7 +51,7 @@ Capabilities are added through ports and `createXxx(deps)` factories, connected 
 
 ## The infrastructure seam
 
-`src/infra/` is the one place that knows what the process depends on. `createInfra(config)` returns the dependency checks, an optional shared store for the rate limit and a close function. `main.ts` passes the checks to `buildServer` (where `healthRoutes` runs them) and the store to `rateLimit.store`, and calls `close` on shutdown and after a failed start. A project with no store returns no checks, no store and a close that does nothing, so it starts as the base does. A data overlay replaces `infra.ts` and `infra-env.ts`, and nothing else changes.
+`src/infra/` is the one place that knows what the process depends on. `createInfra(config)` returns the dependency checks, an optional shared store for the rate limit and a close function. `main.ts` passes the checks to `buildServer` (where `healthRoutes` runs them) and the store to `rateLimit.store`, and calls `close` on shutdown and after a failed start. A project with no store returns no checks, no store and a close that does nothing, so it starts as the base does. A data overlay replaces the files of `src/infra/` and adds its own folders (`src/db/`, `src/redis/`); no other file under `src/` changes.
 
 - Startup: after the server is built and before it listens, `main.ts` runs every check under `bounded()`; a failure closes what was opened and exits non-zero naming the check and never a value.
 - A dependency lost after startup answers 503 through `isDependencyOutage`; the process stays up. Each client's factory handles its own `error` events so a lost connection is logged once.
@@ -72,7 +72,7 @@ The request limit is on by default: `buildServer` registers `@fastify/rate-limit
 - Mount it once, above every route, as an `onRequest` hook on the root instance before any `app.register`. A route is public only when it carries `config: { public: true }`.
 - Verify webhook signatures over the raw body before parsing JSON; fail closed (503) when the verifier's dependency is down.
 - The health route (`src/health/routes.ts`) is public, answers the bare probe body and has `config: { rateLimit: false }`; mark it public in the same change as the auth hook.
-- CORS: `@fastify/cors`, with the rule in `api-and-errors.md`.
+- No CORS: the browser reaches the API same-origin through the web app's `/api/v1` proxy (`api-and-errors.md`, Auth).
 - With more than one instance, return a shared store as `rateLimitStore` from `createInfra`.
 
 ## Data access

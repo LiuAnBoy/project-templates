@@ -32,7 +32,7 @@
 
 ## Stack
 
-Stack: FastAPI on Python 3.12 or later, pydantic 2 and pydantic-settings, loguru, pytest, ruff, uv. Data rules, and the store when the project has one, are in `docs/rules/data.md`.
+Stack: FastAPI on Python 3.12 or later, pydantic 2 and pydantic-settings, loguru, pytest, ruff, uv. The data rules are in `docs/rules/data.md`; a project with a store has that store's own rule page beside it.
 
 This is a starter with two public routes, `GET /api/v1/hello` and the health route `GET /api/health` (outside `/api/v1` and the envelope), built on the shared handlers (envelope, failure table, exception handlers, request id, access log) and the `src/infra/` seam that holds what the process depends on. Add modules on top of them; do not rewrite them.
 
@@ -65,7 +65,7 @@ This is a starter with two public routes, `GET /api/v1/hello` and the health rou
 ## PostgreSQL
 
 - Naming and types (`docs/rules/postgres.md`): instants are `timestamptz`, never `timestamp` without a zone and never Unix integers; ids are `uuid` defaulting to `gen_random_uuid()`; `created_at` and `updated_at` are `timestamptz` not null, defaulting to `now()`; a table that needs soft delete adds `deleted_at timestamptz`.
-- Schema, migrations, the query layer and transactions follow `docs/rules/postgres.md`; use the rule page for the task "Schema, migration, query layer, transactions".
+- Schema, migrations, the query layer and transactions follow `docs/rules/postgres.md`.
 - `DATABASE_URL` is required and the only value the server reads; `docker-compose.dev.yml` runs the service in development, and a shared server is reached by changing `.env` alone.
 
 ## PostgreSQL on FastAPI

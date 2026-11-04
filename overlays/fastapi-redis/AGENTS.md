@@ -32,7 +32,7 @@
 
 ## Stack
 
-Stack: FastAPI on Python 3.12 or later, pydantic 2 and pydantic-settings, loguru, pytest, ruff, uv. Data rules, and the store when the project has one, are in `docs/rules/data.md`.
+Stack: FastAPI on Python 3.12 or later, pydantic 2 and pydantic-settings, loguru, pytest, ruff, uv. The data rules are in `docs/rules/data.md`; a project with a store has that store's own rule page beside it.
 
 This is a starter with two public routes, `GET /api/v1/hello` and the health route `GET /api/health` (outside `/api/v1` and the envelope), built on the shared handlers (envelope, failure table, exception handlers, request id, access log) and the `src/infra/` seam that holds what the process depends on. Add modules on top of them; do not rewrite them.
 

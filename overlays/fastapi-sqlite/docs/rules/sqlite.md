@@ -5,7 +5,7 @@ SQLite is accessed through SQLAlchemy 2 on `aiosqlite`, with Alembic for migrati
 ## Connection settings
 
 - The server reads `DATABASE_URL`, the path of the database file, relative to the directory the server starts in. A missing value stops the boot, naming the variable.
-- The file must already exist. Only `make db-migrate` creates it, so a wrong path stops the boot, naming the dependency and never the path, instead of starting an empty database: the store opens the file as a URI with `mode=rw`, and SQLite fails with `SQLITE_CANTOPEN` instead of creating one. `:memory:` is not supported, because the store holds two engines.
+- The file must already exist. Only the migration commands (`make db-migrate`, and `make db-generate` while it compares) create it, so a wrong path stops the boot, naming the dependency and never the path, instead of starting an empty database: the store opens the file as a URI with `mode=rw`, and SQLite fails with `SQLITE_CANTOPEN` instead of creating one. `:memory:` is not supported, because the store holds two engines.
 - `src/db/database.py` is the one file that names SQLite. It exports `create_database(config)`, which returns the session factory, the transaction runner, a probe and a close, and the `src/infra/` seam calls it once. Never open the file a second time from application code.
 - The `data/` folder holds the file and has its own `.gitignore`, so the database is never committed. Back it up with `VACUUM INTO` or the `.backup` command, never by copying the file alone: WAL mode keeps recent writes in the `-wal` file beside it.
 
@@ -26,7 +26,7 @@ SQLite is accessed through SQLAlchemy 2 on `aiosqlite`, with Alembic for migrati
 ### Applying and tracking
 
 - Alembic records the applied revision in `alembic_version`; the files in `alembic/versions/` list the revisions that exist. Nothing keeps its own list by hand.
-- `make db-migrate` is the only way the database changes, and the only thing that creates the file. It applies only what is not recorded, does nothing when the database is up to date, and prints the counts, the names it applied and the record afterwards. A failure prints the statement and the cause; a failure to reach the file prints fixed text and a code, never a path.
+- `make db-migrate` is the only way the database changes. It applies only what is not recorded, does nothing when the database is up to date, and prints the counts, the names it applied and the record afterwards. A failure prints the statement and the cause; a failure to reach the file prints fixed text and a code, never a path.
 - `make db-migrate` runs with foreign keys off and runs `PRAGMA foreign_key_check` afterwards, also when nothing is pending, failing on any violation. A migration that rebuilds a parent table drops it, and with enforcement on the drop silently deletes the child rows that `ON DELETE CASCADE` points at. The check runs after the migration is applied, so a violation means fixing the data in a new migration.
 - `make db-status` lists the migrations that are still pending and never writes. A missing file means nothing is applied, and a project with no table yet has nothing pending. Several heads on disk fail it.
 - `make db-generate` compares the models with the database, so the database must be at head, and it creates the empty file when it is missing.

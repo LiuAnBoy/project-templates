@@ -44,7 +44,7 @@
 
 ## Stack
 
-Stack: NestJS 11 on Fastify, zod validation (nestjs-zod), nestjs-pino, dayjs behind `src/common/date.ts`, Vitest, ESLint 10 and Prettier, pnpm. Data rules, and the store when the project has one, are in `docs/rules/data.md`.
+Stack: NestJS 11 on Fastify, zod validation (nestjs-zod), nestjs-pino, dayjs behind `src/common/date.ts`, Vitest, ESLint 10 and Prettier, pnpm. The data rules are in `docs/rules/data.md`; a project with a store has that store's own rule page beside it.
 
 This is a starter with two public routes, `GET /api/v1/hello` and the health route `GET /api/health` (outside `/api/v1` and the envelope), built on the shared handlers (envelope, failure table, exception filter, request id, access log) and the global `InfraModule` in `src/infra/` that holds what the process depends on. Add modules on top of them; do not rewrite them.
 
