@@ -1,0 +1,4 @@
+## SQLite on FastAPI
+
+- Take the database from the infra seam: `create_infra(config)` in `src/infra/infra.py` returns `session_factory` (reads, through connections that only read) and `transactions`, and `main.py` passes them to the services it wires. Every write goes through `transactions.run(work)`, and the service passes the session to each repository call. `create_infra` opens the connections once and its `close` releases them; never open another.
+- Database commands: `make db-generate` writes a migration from the models into `alembic/versions/`, `make db-migrate` applies what is not recorded and creates the database file, `make db-status` lists what is pending and never writes, and `make test-integration` runs the store tests against a database file of their own. Copy `.env.example` to `.env` and run `make db-migrate` before the first start: the server refuses to start without the file.

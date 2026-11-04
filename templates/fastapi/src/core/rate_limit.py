@@ -27,6 +27,7 @@ from starlette.datastructures import Headers
 from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 
+from core.bounded import bounded
 from core.dependency import is_dependency_outage
 from core.envelope import failure
 from core.errors import FAILURES
@@ -37,6 +38,9 @@ _NAMED_RANGES: dict[str, tuple[str, ...]] = {
     "linklocal": ("169.254.0.0/16", "fe80::/10"),
     "uniquelocal": ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "fc00::/7"),
 }
+
+#: How long a call to the storage has before it counts as unreachable, in seconds.
+STORAGE_TIMEOUT_SECONDS = 1.0
 
 #: The part of an IPv6 address that names one subscriber; the rest is one client's own to vary.
 _IPV6_PREFIX = 64
@@ -194,9 +198,10 @@ class RateLimitMiddleware:
     failure table's ``too_many_requests`` in the failure envelope, with
     ``Retry-After``. A path in ``exempt_paths`` (a probe, say) is neither counted nor
     refused; nothing is exempt by default. When the storage cannot be reached (an
-    error :func:`core.dependency.is_dependency_outage` accepts) the request is
-    refused with the table's ``unavailable`` 503 instead of passing unlimited; any
-    other storage error is a bug and propagates.
+    error :func:`core.dependency.is_dependency_outage` accepts, or no answer within
+    ``storage_timeout_seconds``) the request is refused with the table's
+    ``unavailable`` 503 instead of passing unlimited, and never waits on a storage that
+    is silent; any other storage error is a bug and propagates.
     """
 
     def __init__(
@@ -208,6 +213,7 @@ class RateLimitMiddleware:
         window_seconds: int,
         trusted_proxies: Collection[Network] = (),
         exempt_paths: Collection[str] = (),
+        storage_timeout_seconds: float | None = None,
     ) -> None:
         """Wrap an application.
 
@@ -218,12 +224,17 @@ class RateLimitMiddleware:
             window_seconds: The window, in seconds.
             trusted_proxies: Proxy networks whose ``x-forwarded-for`` is believed.
             exempt_paths: Exact request paths the limit skips.
+            storage_timeout_seconds: How long each call to the storage has to answer; defaults
+                to ``STORAGE_TIMEOUT_SECONDS``.
         """
         self.app = app
         self._item = RateLimitItemPerSecond(max_requests, window_seconds)
         self._limiter = FixedWindowRateLimiter(storage)
         self._trusted = tuple(trusted_proxies)
         self._exempt = frozenset(exempt_paths)
+        self._timeout = (
+            STORAGE_TIMEOUT_SECONDS if storage_timeout_seconds is None else storage_timeout_seconds
+        )
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         """Handle one ASGI call.
@@ -239,7 +250,13 @@ class RateLimitMiddleware:
 
         key = client_key(scope, self._trusted)
         try:
-            allowed = await self._limiter.hit(self._item, key)
+            allowed = await bounded(
+                self._limiter.hit(self._item, key), self._timeout, "rate limiter"
+            )
+            if not allowed:
+                window = await bounded(
+                    self._limiter.get_window_stats(self._item, key), self._timeout, "rate limiter"
+                )
         except Exception as error:
             if not is_dependency_outage(error):
                 raise
@@ -251,7 +268,6 @@ class RateLimitMiddleware:
             await self.app(scope, receive, send)
             return
 
-        window = await self._limiter.get_window_stats(self._item, key)
         retry_after = max(1, math.ceil(window.reset_time - time.time()))
         status, message = FAILURES["too_many_requests"]
         response = JSONResponse(

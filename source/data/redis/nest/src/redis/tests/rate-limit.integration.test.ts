@@ -90,12 +90,17 @@ describe('the rate limit in Redis', () => {
     expect(four.body).toBe(TOO_MANY);
   });
 
-  it('keeps every counter under the service prefix, with a TTL', async () => {
+  it('keeps every counter under the service prefix, in the throttler package key shape, with a TTL', async () => {
     const keys = await keysWithPrefix(first.client, target.prefix);
 
     expect(keys.length).toBeGreaterThan(0);
     for (const key of keys) {
-      expect(key).toContain(`${target.prefix}:rate-limit:`);
+      // The package wraps each key in a hash tag, so the prefix is inside the braces.
+      expect(key).toMatch(
+        new RegExp(
+          `^\\{${target.prefix}:rate-limit:default:10\\.9\\.9\\.9:default\\}:(hits|blocked)$`,
+        ),
+      );
       expect(await first.client.pttl(key)).toBeGreaterThan(0);
     }
   });

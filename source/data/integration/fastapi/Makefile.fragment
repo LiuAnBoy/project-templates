@@ -1,0 +1,5 @@
+.PHONY: test-integration
+
+# Run the store tests against the services of .env (start docker-compose.dev.yml first).
+test-integration:
+	uv run --frozen pytest tests_integration

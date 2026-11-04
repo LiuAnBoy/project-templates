@@ -4,12 +4,16 @@ Redis holds disposable or coordination state: caches, locks, pub/sub messages an
 
 ## Connection and keys
 
-- One client per process, from a URL in the settings (`REDIS_URL`), created through the `src/infra/` seam; no host or credential in code. Reuse the client; do not open one per request.
-- Key shape: `<service>:<entity>:<id>[:<facet>]`, lower case, colon separated, for example `shop:product:42:detail`. The service prefix keeps services sharing one Redis apart.
+- `src/redis_client/client.py` is the one file that creates the Redis client (the package is not called `redis`, which would shadow the library). `create_redis_client(config)` returns the client, a probe and a close from a URL in the settings (`REDIS_URL`); the `src/infra/` seam calls it once. No host or credential in code. Reuse the client; never open one per request.
+- The client connects on first use, has no offline queue and does not retry. While it holds no connection every command fails at once with a connection error the shared classifier answers as 503, instead of waiting in memory and running late; a server that accepts the connection and then stays silent ends in a timeout error after two seconds. The error text carries the host and port, so the log withholds it (`core.failure`) and no URL, key or value reaches a log or an answer.
+- Start-up checks the connection with a real `PING`: if Redis cannot be reached the server does not start and says `redis`, never a value. After start-up the health route answers 503 while Redis is lost and 200 again once it is back, and the process stays up.
+- Key shape for your own keys: `<service>:<entity>:<id>[:<facet>]`, lower case, colon separated, for example `shop:product:42:detail`. The service prefix keeps services sharing one Redis apart. Change `REDIS_KEY_PREFIX` of `src/redis_client/client.py` (`app`) to the project's name once, and use it for your own keys too.
+- The template writes its rate-limit counters under that prefix too, each with a TTL: `app:rate-limit:LIMITER/<client>/<max>/<window>/second`, through `limits` and the client's own connection pool. They expire by themselves.
 - Every key written by application code gets a TTL, except queue keys that the queue library manages. Reason: a key without a TTL becomes permanent clutter.
-- Never run `FLUSHALL` or `FLUSHDB`, in code, scripts or by hand against a shared instance. To clear, delete keys by exact name or by `SCAN` with the service prefix, in batches.
-- Never use `KEYS` in application code; use `SCAN`.
+- Never run `FLUSHALL` or `FLUSHDB`, in code, scripts or by hand against a shared instance. To clear, delete keys by exact name or by `SCAN` with `MATCH` on the service prefix (`app:*`), in batches.
+- Never use `KEYS` in application code; use `SCAN` (`scan_iter`).
 - An unreachable Redis answers 503, not 500 (see `api-and-errors.md`). A cache miss caused by an outage falls through to the database where that is safe.
+- A call to Redis on the request path goes under `bounded()`: a connection that is up but silent would otherwise hold the request open. The rate limiter already does, with a one second bound, and it fails closed: when Redis does not answer, the request is answered 503 and is not let through uncounted.
 
 ## Cache-aside
 

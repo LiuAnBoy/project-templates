@@ -1,8 +1,11 @@
+import asyncio
+
 import pytest
 from fastapi.testclient import TestClient
 from limits.aio.storage import MemoryStorage
 
 import main
+from core import rate_limit
 from core.config import Settings
 from core.rate_limit import client_key, parse_trusted_proxies
 from infra.types import Infra
@@ -170,3 +173,23 @@ def test_a_limiter_storage_with_a_bug_is_not_hidden_as_an_outage(
     response = client.get("/api/v1/hello")
 
     assert response.status_code == 500
+
+
+class _SilentStorage(MemoryStorage):
+    """A limiter storage whose store accepts the call and never answers."""
+
+    async def incr(self, *args: object, **kwargs: object) -> int:  # type: ignore[override]
+        await asyncio.sleep(30)
+        return 0
+
+
+def test_a_limiter_storage_that_never_answers_gets_the_503_within_the_bound(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(rate_limit, "STORAGE_TIMEOUT_SECONDS", 0.2)
+    client = _client_with_storage(monkeypatch, _SilentStorage())
+
+    response = client.get("/api/v1/hello")
+
+    assert response.status_code == 503
+    assert response.text == '{"success":false,"payload":{"message":"service unavailable"}}'

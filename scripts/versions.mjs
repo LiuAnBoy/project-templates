@@ -258,7 +258,8 @@ export function describeDifference(actual, expected) {
 export async function run(argv, options = {}) {
   const root = options.root ?? ROOT;
   const log = options.log ?? ((line) => console.log(line));
-  const today = options.today ?? new Date().toISOString().slice(0, 10);
+  // sv-SE formats as YYYY-MM-DD in the local time zone, the day the person running it sees.
+  const today = options.today ?? new Date().toLocaleDateString('sv-SE');
   const flags = new Set(argv);
   const unknown = argv.filter((a) => a !== '--stamp' && a !== '--check');
   if (unknown.length > 0 || (flags.has('--check') && flags.has('--stamp'))) {

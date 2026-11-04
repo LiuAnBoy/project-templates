@@ -68,12 +68,12 @@ pnpm install
 ### 一次建立 monorepo
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/LiuAnBoy/project-templates/master/monorepo.sh | bash -s -- <project> <next|vite> <plain|antd|mui|heroui> <nest|fastify|fastapi> [--dashboard <next|vite> <plain|antd|mui|heroui>]
+curl -fsSL https://raw.githubusercontent.com/LiuAnBoy/project-templates/master/monorepo.sh | bash -s -- <project> <next|vite> <plain|antd|mui|heroui> <nest|fastify|fastapi> [--dashboard <next|vite> <plain|antd|mui|heroui>] [--data <postgres|sqlite|redis|postgres,redis|sqlite,redis>]
 ```
 
-結果是 `<project>/`，內含 `web/`、`server/`、`docs/`，選 Node 後端時還有 `contract/`；加上 `--dashboard` 會多一個 `dashboard/`，建法與 `web/` 相同。`plain` 表示不套用 overlay。
+結果是 `<project>/`，內含 `web/`、`server/`、`docs/`，選 Node 後端時還有 `contract/`；加上 `--dashboard` 會多一個 `dashboard/`，建法與 `web/` 相同；加上 `--data` 會把該資料 overlay 疊在 `server/` 上（見「資料庫」）。`plain` 表示不套用 overlay。
 
-- 指令先驗證所有參數，才開始寫入；專案名稱只能用字母、數字、`.`、`_`、`-`，且以字母或數字開頭。目標已存在就拒絕，不會寫入任何東西。
+- 指令先驗證所有參數，才開始寫入，不合法一律以結束碼 2 拒絕；專案名稱只能用字母、數字、`.`、`_`、`-`，且以字母或數字開頭。目標已存在就拒絕，不會寫入任何東西。`--data` 必須有值。
 - 它在同一個目錄旁的暫存目錄組合，全部成功才移到位。它不安裝套件，也不執行 `git init`，只印出下一步。
 - 每個部分保留自己的 `AGENTS.md`、`CLAUDE.md` 與 `docs/`。根目錄的 `docs/` 放產品規則，`web/docs/`、`server/docs/` 放實作文件。
 - 選 Node 後端（`nest`、`fastify`）時，`contract/` 的套件名稱是 `@app/contract`，已接進 `web/`、`dashboard/` 與 `server/` 的 `package.json`；根目錄的 `pnpm install` 會建置它。選 `fastapi` 時沒有 `contract/`（Python 後端用不到），根目錄只管理前端，後端用 uv。
@@ -88,7 +88,7 @@ pnpm install      # 安裝所有套件，並建置 contract
 pnpm dev          # 同時啟動前端（與後台）和 Node 後端
 ```
 
-選 `fastapi` 時，另外執行 `(cd server && uv sync)`，並在另一個終端機執行 `make -C server dev`。
+選 `fastapi` 時，另外執行 `(cd server && uv sync)`，並在另一個終端機執行 `make -C server dev`。有 `--data` 時，`pnpm dev` 之前先照印出的步驟複製 `.env`、啟動服務、套用 migration。
 
 ## 重新命名與串接
 
@@ -107,7 +107,37 @@ pnpm dev          # 同時啟動前端（與後台）和 Node 後端
 
 ## 資料庫
 
-範本本身不附任何資料庫。通則寫在後端的 `docs/rules/data.md`：Node 專案的 schema 與 migration 使用 Drizzle，FastAPI 專案使用 SQLAlchemy 與 Alembic；資料表與欄位一律 snake_case，id 是 UUID，時間在 API 上一律是 ISO 8601 字串。程序依賴的東西（資料庫、快取）集中在後端的 `src/infra/`：伺服器開始監聽之前先檢查它們，失敗就以非零代碼結束並指出名稱（不印出值）；`GET /api/health` 也執行同樣的檢查，失敗時回 503 `{"status":"unavailable"}`。各資料庫自己的規則頁與連線設定，由日後建立專案時選定的資料 overlay 帶入。
+範本本身不附任何資料庫。通則寫在後端的 `docs/rules/data.md`：Node 專案的 schema 與 migration 使用 Drizzle，FastAPI 專案使用 SQLAlchemy 與 Alembic；資料表與欄位一律 snake_case，id 是 UUID，時間在 API 上一律是 ISO 8601 字串。程序依賴的東西（資料庫、快取）集中在後端的 `src/infra/`：伺服器開始監聽之前先檢查它們，失敗就以非零代碼結束並指出名稱（不印出值）；啟動之後資料庫或 Redis 失聯，請求回 503，行程不會結束；`GET /api/health` 也執行同樣的檢查，失敗時回 503 `{"status":"unavailable"}`。日誌不會出現綁定的值、主機、網址或路徑。
+
+### 資料 overlay
+
+資料庫在**建立專案時**選一次，以 overlay 疊上去，做法與 UI overlay 相同。Overlay 名稱是 `<後端>-<資料庫>`、`<後端>-<資料庫>-redis` 或 `<後端>-redis`，後端是 `nest`、`fastify` 或 `fastapi`，資料庫是 `postgres` 或 `sqlite`，共十五個。在已取得的後端範本裡執行：
+
+```sh
+curl https://codeload.github.com/LiuAnBoy/project-templates/tar.gz/master | tar -xz --strip=3 project-templates-master/overlays/<overlay>
+```
+
+Overlay 帶來資料庫的程式碼與規則頁、連線設定（`.env.example`）、需要服務時的 `docker-compose.dev.yml`，以及完整的 `package.json` 與鎖定檔（Node），或 `pyproject.toml` 與 `uv.lock`（FastAPI）。
+
+專案的啟動順序是：先安裝套件，再把 `.env.example` 複製成 `.env`，啟動服務，套用 migration，最後才啟動伺服器，因為伺服器缺少設定、服務或資料表時會拒絕啟動：
+
+```sh
+cp .env.example .env
+docker compose -f docker-compose.dev.yml up -d --wait   # 只有 PostgreSQL 或 Redis 需要；SQLite 沒有這一步
+pnpm db:migrate                                          # FastAPI：make db-migrate；只有 Redis 時沒有這一步
+pnpm dev                                                 # FastAPI：make dev
+```
+
+用 `monorepo.sh --data <選擇>` 時，這些步驟會在建立完成後印出來，compose 指令已帶上專案名稱（`-p`），多個專案在同一台機器上不會共用容器與資料卷。`--data` 只接受 `postgres`、`sqlite`、`redis`、`postgres,redis`、`sqlite,redis`，建議這樣選：
+
+| 選擇 | 什麼時候用 |
+| ---- | ---------- |
+| `postgres` | 預設。專案自己有 PostgreSQL 服務，之後只改 `.env` 就能換到共用的伺服器 |
+| `sqlite` | 只有一個執行個體、不想多一個資料庫服務 |
+| `redis` | 只需要快取、鎖或佇列；沒有資料庫 |
+| `postgres,redis`、`sqlite,redis` | 資料庫加上 Redis；速率限制也改用 Redis 計數，讓多個執行個體共用同一個上限 |
+
+FastAPI 的資料庫程式碼有整合測試，但沒有正式環境的使用紀錄。
 
 ## 修改範本
 
@@ -115,8 +145,8 @@ pnpm dev          # 同時啟動前端（與後台）和 Node 後端
 
 1. 修改 `source/`（各層的檔案與 `package.fragment.json`、`AGENTS.fragment.md`），或在 `scripts/recipes.mjs` 調整各範本由哪些層組成。
 2. `node scripts/render.mjs`（可用 `--only a,b`）重新產生。
-3. 相依套件變動時：`bash scripts/lock.sh <name>...` 重新產生鎖定檔。
-4. `bash scripts/verify.sh`：建立封存檔，驗證每個 overlay 與範本（安裝、lint、型別、測試、建置、實際啟動、文件、`.env` 被忽略），用 `monorepo.sh` 組出三種組合並實際連線，最後確認 `monorepo.sh` 會拒絕不合法的輸入。全部通過才算完成，並更新 `VERSIONS.md` 的驗證日期。
+3. 相依套件變動時：`bash scripts/lock.sh <name>...` 重新產生鎖定檔（`--data` 加上所有資料 overlay）。
+4. `bash scripts/verify.sh`：建立封存檔，驗證每個 overlay 與範本（安裝、lint、型別、測試、建置、實際啟動、文件、`.env` 被忽略），資料 overlay 還會用 Docker 啟動真正的 PostgreSQL 與 Redis（占用 15432 與 16379 埠）驗證，用 `monorepo.sh` 組出五種組合並實際連線，最後確認 `monorepo.sh` 會拒絕不合法的輸入。全部通過才算完成，並更新 `VERSIONS.md` 的驗證日期；沒有 Docker 時結束碼是 3，表示未完成，不是通過，也不會更新驗證日期。
 
 各腳本的細節在 [`AGENTS.md`](AGENTS.md)。
 
@@ -137,7 +167,7 @@ pnpm dev          # 同時啟動前端（與後台）和 Node 後端
 | 路徑         | 內容                                                             |
 | ------------ | ---------------------------------------------------------------- |
 | `templates/` | 產生出來的獨立範本（提交）                                       |
-| `overlays/`  | 產生出來的 UI overlay（提交）                                    |
+| `overlays/`  | 產生出來的 UI overlay 與資料 overlay（提交）                     |
 | `source/`    | 範本與 overlay 的來源層                                          |
 | `scripts/`   | render、鎖定、檢查、封存、驗證與版本的工具                       |
 | `monorepo.sh`| 一行指令建立 monorepo                                            |

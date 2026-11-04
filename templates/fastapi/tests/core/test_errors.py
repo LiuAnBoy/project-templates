@@ -166,3 +166,16 @@ def test_a_psycopg_error_the_server_reported_is_not_an_outage() -> None:
     deadlock = _foreign_error("psycopg.errors", "OperationalError", sqlstate="40P01")
 
     assert not is_dependency_outage(deadlock)
+
+
+def test_a_psycopg_connect_timeout_is_an_outage() -> None:
+    operational = type(
+        "OperationalError", (Exception,), {"__module__": "psycopg", "sqlstate": None}
+    )
+    timeout = type("ConnectionTimeout", (operational,), {"__module__": "psycopg.errors"})
+
+    assert is_dependency_outage(timeout("connection timeout expired"))
+
+
+def test_a_sqlalchemy_pool_timeout_is_an_outage() -> None:
+    assert is_dependency_outage(_foreign_error("sqlalchemy.exc", "TimeoutError"))

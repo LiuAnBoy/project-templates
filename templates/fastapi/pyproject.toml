@@ -40,5 +40,5 @@ select = ["E", "F", "W", "I", "B", "UP", "D"]
 convention = "google"
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**" = ["D"]
+"tests*/**" = ["D"]
 "**/__init__.py" = ["D104"]

@@ -16,6 +16,7 @@ src/
     middleware.py          # request id and access log
     rate_limit.py          # per-client request limit (the limits package behind a middleware)
     logging.py             # loguru setup
+    failure.py             # format_failure: a traceback without the messages that carry values
     paging.py              # page_params and MAX_PAGE_SIZE
     dependency.py          # is_dependency_outage
     dependency_checks.py   # DependencyCheck, HealthProbe and the startup gate
@@ -33,7 +34,7 @@ tests/conftest.py
 
 `repository.py`, `rows.py`, `exceptions.py` and `constants.py` join a module when it first needs them: a file exists when it holds code.
 
-Tooling: uv (dependencies, `uv run`), ruff (lint and format, Google-style docstrings enforced), pytest. The Makefile has `dev`, `start`, `lint`, `format`, `format-check` and `test`.
+Tooling: uv (dependencies, `uv run`), ruff (lint and format, Google-style docstrings enforced), pytest. The Makefile has `dev`, `start`, `lint`, `format`, `format-check` and `test`; a data overlay adds `test-integration` and, for a SQL store, `db-generate`, `db-migrate` and `db-status`.
 
 ## Imports run one way
 
@@ -66,7 +67,7 @@ Capabilities are added through ports and `create_xxx(deps)` factories, connected
 ## Errors and logging
 
 - `core/errors.py` holds `FAILURES` and `ApiError(code, name=None)`; `core/envelope.py` holds `success`, `listing` and `failure`. The handlers registered by `create_app` turn `ApiError`, `RequestValidationError`, `HTTPException` and any unexpected exception into the failure envelope, per `api-and-errors.md`.
-- loguru is configured once in `core/logging.py` and writes to stdout; standard-library records (uvicorn, libraries) are routed into it. Log the cause chain of unexpected errors, and never a secret, token or full request body. Tracebacks never include variable values.
+- loguru is configured once in `core/logging.py` and writes to stdout; standard-library records (uvicorn, libraries) are routed into it. Log the cause chain of unexpected errors, and never a secret, token or full request body. Tracebacks never include variable values, and every exception a record carries is rendered by `core/failure.py`, whoever logged it: the frames and classes stay, and the message of a connection failure or of a driver error that quotes a value is withheld.
 - The access log records the route pattern, never the concrete URL.
 
 ## Data access

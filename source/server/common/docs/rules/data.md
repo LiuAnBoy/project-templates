@@ -29,6 +29,7 @@ These rules hold for every project of this template, whether or not it has a sto
 - Before the server listens, every dependency check runs under `bounded()`. A failed check exits non-zero naming the dependency and never a value, because a driver's error text can carry the host, the path or the URL.
 - A dependency lost after startup answers 503 through `isDependencyOutage` (`is_dependency_outage`) and the process stays up. `GET /api/health` runs the same checks through one shared probe, answers 200 `{"status":"ok"}` or 503 `{"status":"unavailable"}` with no check name in the body, and stays exempt from the rate limit.
 - Wrap every dependency call on the request path in `bounded()`.
+- A log never holds a bound value, a key, a URL, a host or a path. A failed statement is logged with its text and its code and without its parameters, and a driver error that quotes a value, or names the host, is logged with its class and without its message (`describeFailure` on Node, `format_failure` on FastAPI).
 
 ## Tests
 

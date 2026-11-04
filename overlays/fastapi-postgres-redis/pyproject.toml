@@ -1,0 +1,49 @@
+[project]
+name = "server"
+version = "0.0.0"
+description = "FastAPI backend starter"
+requires-python = ">=3.12"
+dependencies = [
+    "alembic==1.20.1",
+    "fastapi==0.162.0",
+    "greenlet==3.5.6",
+    "limits==5.8.0",
+    "loguru==0.7.3",
+    "psycopg[binary]==3.3.8",
+    "pydantic==2.14.2",
+    "pydantic-settings==2.16.2",
+    "redis==8.1.0",
+    "sqlalchemy==2.1.8",
+    "uvicorn==0.54.0",
+]
+
+[dependency-groups]
+dev = [
+    "httpx2==2.16.0",
+    "pytest==9.2.0",
+    "ruff==0.17.3",
+]
+
+[tool.uv]
+# An application, not a library: dependencies are installed, the project is not.
+package = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src"]
+
+[tool.ruff.lint]
+# E/W pycodestyle, F pyflakes, I isort, B bugbear, UP pyupgrade, D docstrings (Google style).
+select = ["E", "F", "W", "I", "B", "UP", "D"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.lint.per-file-ignores]
+"tests*/**" = ["D"]
+"**/__init__.py" = ["D104"]

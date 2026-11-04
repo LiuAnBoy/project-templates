@@ -1,0 +1,4 @@
+## PostgreSQL on FastAPI
+
+- Take the database from the infra seam: `create_infra(config)` in `src/infra/infra.py` returns `session_factory` and `transactions`, and `main.py` passes them to the services it wires. A service opens the transaction with `transactions.run(work)` and passes the session to each repository call. `create_infra` creates the engine once and its `close` releases it; never create another.
+- Database commands: `make db-generate` writes a migration from the models into `alembic/versions/`, `make db-migrate` applies what is not recorded, `make db-status` lists what is pending and never writes, and `make test-integration` runs the store tests against the compose service (start it first, and copy `.env.example` to `.env`). The server refuses to start until `.env` holds `DATABASE_URL`.

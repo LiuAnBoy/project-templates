@@ -118,7 +118,22 @@ pt_web_part() {
   pt_edit_part "$2/$3" "$3" "$6" "$7"
 }
 
-# pt_compose <archive> <root> <web-fw> <web-ui> <server> <dash-fw> <dash-ui> <data>:
+# pt_compose_name <project>: print the name compose gets for the project (lower case, dots as
+# underscores, which compose accepts).
+pt_compose_name() {
+  printf '%s' "$1" | tr 'A-Z.' 'a-z_'
+}
+
+# pt_name_compose <file> <project>: name the project in the commands of a compose file's header.
+# The file sits in server/, which compose would take as the project name, so two projects on one
+# machine would share containers and volumes, and `down -v` would delete another project's data.
+pt_name_compose() {
+  compose_name="$(pt_compose_name "$2")"
+  sed -e "/^#/s|docker compose -f|docker compose -p $compose_name -f|" "$1" >"$1.named" || return 1
+  mv "$1.named" "$1"
+}
+
+# pt_compose <archive> <root> <web-fw> <web-ui> <server> <dash-fw> <dash-ui> <data> <project>:
 # build the project tree in root. dash-fw is empty without a dashboard, data without a store.
 pt_compose() {
   archive="$1"
@@ -143,6 +158,9 @@ pt_compose() {
   if [ -n "$8" ]; then
     # The overlay of a store pair is named after both: postgres,redis -> nest-postgres-redis.
     pt_extract "$archive" 3 "$root/server" "overlays/$5-${8//,/-}" || return 1
+    if [ -f "$root/server/docker-compose.dev.yml" ]; then
+      pt_name_compose "$root/server/docker-compose.dev.yml" "$9" || return 1
+    fi
   fi
   if [ "$5" != fastapi ]; then
     rm -f "$root/server/pnpm-lock.yaml" "$root/server/pnpm-workspace.yaml"
@@ -164,8 +182,7 @@ pt_data_steps() {
   case "$2" in
     sqlite) ;;
     *)
-      compose_name="$(printf '%s' "$3" | tr 'A-Z.' 'a-z_')"
-      echo "  docker compose -p $compose_name -f server/docker-compose.dev.yml up -d --wait   # starts the store(s); stop them with the same -p"
+      echo "  docker compose -p $(pt_compose_name "$3") -f server/docker-compose.dev.yml up -d --wait   # starts the store(s); stop them with the same -p"
       ;;
   esac
   case "$2" in
@@ -227,6 +244,7 @@ pt_main() {
   dash_fw=""
   dash_ui=""
   data=""
+  data_given=0
   while [ "$#" -gt 0 ]; do
     case "$1" in
       --dashboard)
@@ -236,8 +254,9 @@ pt_main() {
         shift 3
         ;;
       --data)
-        { [ "$#" -ge 2 ] && [ -z "$data" ]; } || { pt_usage; return 2; }
+        { [ "$#" -ge 2 ] && [ "$data_given" -eq 0 ]; } || { pt_usage; return 2; }
         data="$2"
+        data_given=1
         shift 2
         ;;
       *)
@@ -260,14 +279,14 @@ pt_main() {
     pt_choice "$dash_fw" next vite || { pt_fail "unknown dashboard framework \"$dash_fw\" (next or vite)"; return 2; }
     pt_choice "$dash_ui" plain antd mui heroui || { pt_fail "unknown dashboard UI choice \"$dash_ui\" (plain, antd, mui or heroui)"; return 2; }
   fi
-  if [ -n "$data" ]; then
+  if [ "$data_given" -eq 1 ]; then
     pt_choice "$data" postgres sqlite redis postgres,redis sqlite,redis || { pt_fail "unknown data choice \"$data\" (postgres, sqlite, redis, postgres,redis or sqlite,redis)"; return 2; }
   fi
 
   target="$PWD/$project"
   if [ -e "$target" ] || [ -L "$target" ]; then
     pt_fail "$project already exists here; choose another name"
-    return 1
+    return 2
   fi
   archive="${PROJECT_TEMPLATES_ARCHIVE:-}"
   if [ -n "$archive" ] && [ ! -f "$archive" ]; then
@@ -291,7 +310,7 @@ pt_main() {
   fi
 
   mkdir "$work/root" || return 1
-  pt_compose "$archive" "$work/root" "$web_fw" "$web_ui" "$server" "$dash_fw" "$dash_ui" "$data" || return 1
+  pt_compose "$archive" "$work/root" "$web_fw" "$web_ui" "$server" "$dash_fw" "$dash_ui" "$data" "$project" || return 1
 
   if [ -e "$target" ] || [ -L "$target" ]; then
     pt_fail "$project appeared while the project was being composed; nothing was moved"

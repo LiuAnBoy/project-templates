@@ -19,9 +19,12 @@ export const redisEnv = {
 export type RedisConfig = { REDIS_URL: string };
 
 /**
- * The first segment of every key this template writes itself (the rate limiter's
+ * The service prefix of the keys this template writes itself (the rate limiter's
  * counters). Several services may share one Redis, so change it to the name of
  * the project, and use it for the keys of your own code too (`<service>:<entity>:<id>`).
+ * Fastify's counters start with it (`app:rate-limit:...`); Nest's come from a package
+ * that wraps each key in a hash tag, so they contain it without starting with it
+ * (`{app:rate-limit:default:<client>:default}:hits`).
  */
 export const REDIS_KEY_PREFIX = 'app';
 

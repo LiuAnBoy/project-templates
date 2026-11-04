@@ -2,25 +2,36 @@
 # Whole verification of the repository, the way a user receives it.
 #
 # Usage: bash scripts/verify.sh
-# Stops at the first failing step and exits non-zero; exits 0 only when every
-# step passed, and then stamps VERSIONS.md with today's date.
+# Stops at the first failing step and exits non-zero. Exit codes: 0 every step ran and
+# passed, and VERSIONS.md was stamped with today's date; 1 a step failed; 3 every step
+# passed but some real-store check could not run because Docker is absent (its last line
+# is `INCOMPLETE verify: <n> overlays not checked against real services`), which is
+# incomplete and never a pass, and VERSIONS.md is not stamped.
 #
 # Steps, in order:
 #   1. tooling: bash syntax of every script, render --check, the tooling tests
 #      (render, check-docs, versions)
 #   2. a codeload-shaped archive of the files on disk (make-archive.sh)
 #   3. every UI overlay through check-overlays.sh
-#   4. every template, extracted from that archive with the README's tar flags
+#   4. every data overlay of recipes.mjs, one at a time through check-overlays.sh: the
+#      static checks of all of them, and check-store.sh (real services) for those in DATA_LIVE
+#   5. every template, extracted from that archive with the README's tar flags
 #      into an empty directory: check-template, live-check, check-docs, then
 #      `git init` there and `git check-ignore .env`
-#   5. monorepo.sh against the archive, three compositions: install, check-docs,
+#   6. monorepo.sh against the archive, five compositions: install, check-docs,
 #      typecheck, then both sides started and /api/v1/hello curled through the
-#      web port(s) with the whole envelope asserted
-#   6. monorepo.sh refuses an unknown name and an existing target and writes nothing
-#   7. node scripts/versions.mjs --stamp
-# Needs network access (package installs), pnpm, uv, git, curl and node.
-# The ports a composition uses must be free: 8000 plus its web ports (3000, 3001, 15173).
-# The Vite composition runs on 15173 rather than its default 5173, because a Vite dev
+#      web port(s) with the whole envelope asserted. Two of them carry a store: with
+#      `--data sqlite` the server's .env is written and the database migrated; with
+#      `--data postgres,redis` the compose file of server/ is started with the command
+#      its own header prints (which must name the project), .env is written, the
+#      database migrated, and the compose project is dropped afterwards
+#   7. monorepo.sh refuses bad input with exit 2 and writes nothing
+#   8. node scripts/versions.mjs --stamp, only when nothing was left incomplete
+# Needs network access (package installs), pnpm, uv, git, curl and node, and Docker for
+# the real-store checks. The ports a run uses must be free: 8000 plus the web ports of a
+# composition (3000, 3001, 15173), and 15432 (PostgreSQL) and 16379 (Redis) for the
+# services of the data overlays and of the PostgreSQL composition.
+# The Vite compositions run on 15173 rather than its default 5173, because a Vite dev
 # server is often running for other work on the machine, and the proxy under test does
 # not depend on the port.
 
@@ -33,6 +44,8 @@ set -m # background servers get their own process group so the whole tree can be
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/verify.XXXXXX")" || exit 1
 PIDS=""
+COMPOSES=""    # "<dir>|<compose project>" of every compose project this run started
+INCOMPLETE=0   # real-store checks that could not run because Docker is absent
 
 # stop_all: terminate every background process group started by this script.
 stop_all() {
@@ -51,8 +64,17 @@ stop_all() {
   PIDS=""
 }
 
+# drop_composes: stop and drop every compose project this run started, and only those.
+drop_composes() {
+  for entry in $COMPOSES; do
+    (cd "${entry%%|*}" && docker compose -p "${entry#*|}" -f docker-compose.dev.yml down -v >/dev/null 2>&1)
+  done
+  COMPOSES=""
+}
+
 cleanup() {
   stop_all
+  drop_composes
   rm -rf "$WORK"
 }
 trap cleanup EXIT
@@ -85,6 +107,24 @@ require_free() {
   for port in "$@"; do
     port_busy "$port" && die "port $port is already in use"
   done
+}
+
+# docker_ready: succeed when a docker binary exists and its daemon answers in time.
+docker_ready() {
+  command -v docker >/dev/null 2>&1 || return 1
+  docker info >/dev/null 2>&1 &
+  info_pid=$!
+  i=0
+  while kill -0 "$info_pid" 2>/dev/null; do
+    if [ "$i" -ge 150 ]; then
+      kill -KILL "$info_pid" 2>/dev/null
+      { wait "$info_pid"; } 2>/dev/null
+      return 1
+    fi
+    sleep 0.1
+    i=$((i + 1))
+  done
+  wait "$info_pid"
 }
 
 # start_bg <name> <dir> <command...>: start a command in the background, log under WORK.
@@ -149,7 +189,7 @@ check_template_dir() {
   echo "PASS template $name"
 }
 
-# compose <dir> <args...>: run monorepo.sh against the archive in a fresh directory.
+# compose <dir> <project> <args...>: run monorepo.sh against the archive in a fresh directory.
 compose() {
   dir="$1"
   shift
@@ -204,8 +244,66 @@ fs.writeFileSync(file, text);
 ' "$proj" </dev/null
 }
 
+# data_of <compose args...>: print the value that follows --data, nothing without one.
+data_of() {
+  while [ "$#" -gt 0 ]; do
+    if [ "$1" = "--data" ]; then
+      echo "$2"
+      return 0
+    fi
+    shift
+  done
+  return 0
+}
+
+# move_ports <env-file>: point the file at the ports of this script's own services, 15432
+# (PostgreSQL) and 16379 (Redis), in the *_PORT lines and inside the URLs.
+move_ports() {
+  sed -E \
+    -e "s/^POSTGRES_PORT=.*/POSTGRES_PORT=15432/" \
+    -e "s/^REDIS_PORT=.*/REDIS_PORT=16379/" \
+    -e "/_PORT=/!s/:5432([^0-9]|\$)/:15432\\1/g" \
+    -e "/_PORT=/!s/:6379([^0-9]|\$)/:16379\\1/g" \
+    "$1" >"$1.moved" && mv "$1.moved" "$1"
+}
+
+# prepare_store <proj> <server> <data> <project>: do what the printed next steps say before the
+# dev command: .env, the services (their compose project is dropped by the cleanup), the migration.
+# Returns 3 when the services need Docker and it is absent.
+prepare_store() {
+  proj="$1"
+  server="$2"
+  data="$3"
+  project="$4"
+  cp "$proj/server/.env.example" "$proj/server/.env" || return 1
+  if [ -f "$proj/server/docker-compose.dev.yml" ]; then
+    docker_ready || return 3
+    require_free 15432 16379
+    move_ports "$proj/server/.env" || return 1
+    # The header names the project, or two projects on one machine would share containers
+    # and volumes, and `down -v` of one would delete the other's data.
+    compose_name="$(printf '%s' "$project" | tr 'A-Z.' 'a-z_')"
+    grep -q "^# Start:  *docker compose -p $compose_name -f docker-compose.dev.yml" "$proj/server/docker-compose.dev.yml" ||
+      { echo "FAIL the header of the composed compose file does not name the project $compose_name" >&2; return 1; }
+    COMPOSES="$COMPOSES $proj/server|$compose_name"
+    start_cmd="$(sed -n 's/^# Start: *//p' "$proj/server/docker-compose.dev.yml")"
+    (cd "$proj/server" && bash -c "$start_cmd") || return 1
+  fi
+  case "$data" in
+    redis) ;;
+    *)
+      if [ "$server" = fastapi ]; then
+        (cd "$proj/server" && make db-migrate) || return 1
+      else
+        (cd "$proj" && pnpm --filter server db:migrate) || return 1
+      fi
+      ;;
+  esac
+}
+
 # compose_and_run <name> <probes:0|1> <web-port...> -- <compose args...>:
 # compose, install, check, then run both sides live and assert hello through each web port.
+# With --data the store is prepared first, as the printed next steps say.
 compose_and_run() {
   cname="$1"
   probes="$2"
@@ -216,11 +314,14 @@ compose_and_run() {
     shift
   done
   shift
-  proj="$WORK/m-$cname/app"
+  data="$(data_of "$@")"
+  project=app
+  [ -n "$data" ] && project="ptv$$$cname"
+  proj="$WORK/m-$cname/$project"
   web="$1"
   server="$3"
   echo "=== monorepo $cname: $*"
-  compose "$WORK/m-$cname" app "$@" || return 1
+  compose "$WORK/m-$cname" "$project" "$@" || return 1
   (cd "$proj" && pnpm install) || return 1
   if [ "$server" = fastapi ]; then
     (cd "$proj/server" && uv sync --frozen) || return 1
@@ -228,6 +329,18 @@ compose_and_run() {
   node "$ROOT/scripts/check-docs.mjs" "$proj" || return 1
   [ "$probes" = 1 ] && { add_probes "$proj" "$server" || return 1; }
   (cd "$proj" && pnpm typecheck) || return 1
+
+  if [ -n "$data" ]; then
+    prepare_store "$proj" "$server" "$data" "$project"
+    rc=$?
+    if [ "$rc" -eq 3 ]; then
+      echo "INCOMPLETE monorepo $cname: needs Docker; its services were not started"
+      INCOMPLETE=$((INCOMPLETE + 1))
+      rm -rf "$WORK/m-$cname"
+      return 0
+    fi
+    [ "$rc" -eq 0 ] || return 1
+  fi
 
   require_free 8000 $ports
   if [ "$server" = fastapi ]; then
@@ -260,8 +373,27 @@ compose_and_run() {
     echo "ok   web page imports @app/contract at runtime"
   fi
   stop_all
+  drop_composes
   rm -rf "$WORK/m-$cname"
   echo "PASS monorepo $cname"
+}
+
+# data_overlays: every data overlay of recipes.mjs through check-overlays.sh, one at a time, so
+# an overlay that needs Docker can be told from one that failed.
+data_overlays() {
+  names="$(node -e 'import(require("url").pathToFileURL(process.argv[1]).href).then((m) => console.log(Object.keys(m.dataOverlays).join("\n")))' "$ROOT/scripts/recipes.mjs")" || return 1
+  for overlay in $names; do
+    bash "$ROOT/scripts/check-overlays.sh" "$overlay"
+    rc=$?
+    case "$rc" in
+      0) ;;
+      3)
+        INCOMPLETE=$((INCOMPLETE + 1))
+        echo "INCOMPLETE $overlay: needs Docker; no real-store check ran"
+        ;;
+      *) return 1 ;;
+    esac
+  done
 }
 
 # listing <dir>: print the names inside a directory, including dotfiles.
@@ -269,7 +401,8 @@ listing() {
   ls -A "$1"
 }
 
-# check_refusals: monorepo.sh refuses bad input and writes nothing.
+# check_refusals: monorepo.sh refuses bad input with exit 2 (never any other code, never 0)
+# and writes nothing.
 check_refusals() {
   dir="$WORK/refuse"
   rm -rf "$dir"
@@ -278,6 +411,12 @@ check_refusals() {
   before="$(listing "$dir")"
   run() {
     (cd "$dir" && PROJECT_TEMPLATES_ARCHIVE="$ARCH" bash "$ROOT/monorepo.sh" "$@") >"$WORK/refuse.log" 2>&1
+  }
+  # refused <words...>: the call must end with exit 2; the words are passed as given.
+  refused() {
+    run "$@"
+    rc=$?
+    [ "$rc" -eq 2 ] || { echo "FAIL monorepo.sh exited $rc, not 2, for: $*" >&2; return 1; }
   }
   for bad in \
     "p nope plain nest" \
@@ -301,8 +440,13 @@ check_refusals() {
     "a/b next plain nest" \
     "existing next plain nest"; do
     # shellcheck disable=SC2086 # the words are the point
-    run $bad && { echo "FAIL monorepo.sh accepted: $bad" >&2; return 1; }
+    refused $bad || return 1
   done
+  # An empty value is one word that no split can show, so these are quoted calls.
+  refused p next plain nest --data "" || return 1
+  refused p next plain nest --data "" --data redis || return 1
+  refused p next plain nest --data redis --data "" || return 1
+  refused "" next plain nest || return 1
   [ "$(listing "$dir")" = "$before" ] || { echo "FAIL monorepo.sh wrote something while refusing" >&2; return 1; }
   [ "$(cat "$dir/existing/marker")" = keep ] && [ "$(listing "$dir/existing")" = marker ] || {
     echo "FAIL monorepo.sh touched an existing target" >&2
@@ -323,6 +467,7 @@ step "archive" bash "$ROOT/scripts/make-archive.sh" "$ARCH"
 export ARCHIVE="$ARCH"
 
 step "overlays" bash "$ROOT/scripts/check-overlays.sh" next-antd next-mui next-heroui vite-antd vite-mui vite-heroui
+step "data overlays" data_overlays
 
 for template in next vite nest fastify fastapi workspace; do
   step "template $template" check_template_dir "$template"
@@ -331,10 +476,20 @@ done
 step "monorepo next antd nest" compose_and_run first 1 3000 -- next antd nest
 step "monorepo vite plain fastapi" compose_and_run second 0 15173 -- vite plain fastapi
 step "monorepo next plain nest with dashboard next antd" compose_and_run third 0 3000 3001 -- next plain nest --dashboard next antd
+step "monorepo next plain fastify with sqlite" compose_and_run fourth 0 3000 -- next plain fastify --data sqlite
+step "monorepo vite plain fastapi with postgres and redis" compose_and_run fifth 0 15173 -- vite plain fastapi --data postgres,redis
 step "monorepo refusals" check_refusals
 
 if [ ! -f "$ROOT/scripts/versions.mjs" ]; then
   die "scripts/versions.mjs does not exist yet; VERSIONS.md was not stamped"
+fi
+
+# A run that could not reach Docker has checked less than it claims: it is incomplete, it does
+# not stamp VERSIONS.md, and its last line says so.
+if [ "$INCOMPLETE" -gt 0 ]; then
+  echo
+  echo "INCOMPLETE verify: $INCOMPLETE overlays not checked against real services"
+  exit 3
 fi
 step "stamp VERSIONS.md" node "$ROOT/scripts/versions.mjs" --stamp
 

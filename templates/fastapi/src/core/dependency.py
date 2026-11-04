@@ -6,10 +6,11 @@ client should retry the first and report the second.
 
 The check is an allowlist of what only a broken connection produces, wherever it
 hides in the cause chain: a network error, a timeout, a PostgreSQL SQLSTATE of the
-connection classes, psycopg's failed connect, a SQLite database that is busy, locked
-or cannot be opened, or a Redis client's connection or timeout error. Anything
-unrecognised is not an outage, so a new failure mode arrives as a 500 that gets
-investigated.
+connection classes, psycopg's failed connect (a refused or dropped connection and a
+connect timeout alike), a SQLAlchemy pool that has no connection to give, a SQLite
+database that is busy, locked or cannot be opened, or a Redis client's connection or
+timeout error. Anything unrecognised is not an outage, so a new failure mode arrives
+as a 500 that gets investigated.
 """
 
 import errno
@@ -29,11 +30,13 @@ _ERRNOS = {
 #: SQLite result names, with their extended forms, that mean the database is not usable now.
 _SQLITE_OUTAGE_PREFIXES = ("SQLITE_BUSY", "SQLITE_LOCKED", "SQLITE_CANTOPEN")
 
-#: Redis client error classes that mean there is no connection, by module and name. The
-#: client's errors subclass its own ``RedisError``, not the built-in ``ConnectionError``.
-_REDIS_OUTAGE_CLASSES = {
+#: Client error classes that mean there is no connection to be had, by module and name.
+#: A Redis client's errors subclass its own ``RedisError``, not the built-in
+#: ``ConnectionError``, and SQLAlchemy's pool timeout is not the built-in ``TimeoutError``.
+_CLIENT_OUTAGE_CLASSES = {
     ("redis.exceptions", "ConnectionError"),
     ("redis.exceptions", "TimeoutError"),
+    ("sqlalchemy.exc", "TimeoutError"),
 }
 
 #: How far to follow a chain, so a cycle cannot spin.
@@ -85,17 +88,18 @@ def _is_sqlite_outage(link: BaseException) -> bool:
     return isinstance(name, str) and name.startswith(_SQLITE_OUTAGE_PREFIXES)
 
 
-def _is_redis_outage(link: BaseException) -> bool:
-    """Tell whether an error is a Redis client failing for want of a connection.
+def _is_client_outage(link: BaseException) -> bool:
+    """Tell whether an error is a client failing for want of a connection.
 
     Args:
         link: One error in the chain.
 
     Returns:
-        True for the client's ``ConnectionError`` and ``TimeoutError`` families.
+        True for a Redis client's ``ConnectionError`` and ``TimeoutError`` families and
+        for the timeout of SQLAlchemy's pool.
     """
     return any(
-        (cls.__module__, cls.__name__) in _REDIS_OUTAGE_CLASSES for cls in type(link).__mro__
+        (cls.__module__, cls.__name__) in _CLIENT_OUTAGE_CLASSES for cls in type(link).__mro__
     )
 
 
@@ -103,7 +107,9 @@ def _is_failed_connect(link: BaseException) -> bool:
     """Tell whether an error is psycopg failing to connect.
 
     The failure carries no sqlstate, errno or cause (tried on psycopg 3.3.8 against
-    a closed port), so it is recognised by its module and class. An
+    a closed port, a connection the server dropped and a server that never
+    answered), so it is recognised by its module and class. A connect timeout is a
+    subclass (``ConnectionTimeout``), so the whole class hierarchy is read. An
     ``OperationalError`` that has a sqlstate is a statement-level problem the server
     reported, such as a deadlock, and is not an outage.
 
@@ -111,14 +117,33 @@ def _is_failed_connect(link: BaseException) -> bool:
         link: One error in the chain.
 
     Returns:
-        True for a sqlstate-less ``OperationalError`` of psycopg.
+        True for a sqlstate-less ``OperationalError`` of psycopg, or a subclass of it.
     """
-    cls = type(link)
-    return (
-        cls.__module__.split(".")[0] == "psycopg"
-        and cls.__name__ == "OperationalError"
-        and getattr(link, "sqlstate", None) is None
+    return getattr(link, "sqlstate", None) is None and any(
+        cls.__module__.split(".")[0] == "psycopg" and cls.__name__ == "OperationalError"
+        for cls in type(link).__mro__
     )
+
+
+def is_outage_link(link: BaseException) -> bool:
+    """Tell whether one error, taken alone, is a connection failure.
+
+    Args:
+        link: One error; its causes are not read.
+
+    Returns:
+        True when the error itself is a network error, a timeout, a connection-class
+        SQLSTATE, a failed psycopg connect, a busy or unopenable SQLite database, or a
+        client's connection or timeout error.
+    """
+    if isinstance(link, ConnectionError | TimeoutError | socket.gaierror):
+        return True
+    if isinstance(link, OSError) and link.errno in _ERRNOS:
+        return True
+    state = getattr(link, "sqlstate", None) or getattr(link, "pgcode", None)
+    if _is_connection_sqlstate(state):
+        return True
+    return _is_sqlite_outage(link) or _is_client_outage(link) or _is_failed_connect(link)
 
 
 def is_dependency_outage(error: BaseException) -> bool:
@@ -130,14 +155,4 @@ def is_dependency_outage(error: BaseException) -> bool:
     Returns:
         True when any link of its cause chain is a connection failure.
     """
-    for link in _chain(error):
-        if isinstance(link, ConnectionError | TimeoutError | socket.gaierror):
-            return True
-        if isinstance(link, OSError) and link.errno in _ERRNOS:
-            return True
-        state = getattr(link, "sqlstate", None) or getattr(link, "pgcode", None)
-        if _is_connection_sqlstate(state):
-            return True
-        if _is_sqlite_outage(link) or _is_redis_outage(link) or _is_failed_connect(link):
-            return True
-    return False
+    return any(is_outage_link(link) for link in _chain(error))

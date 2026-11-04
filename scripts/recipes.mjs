@@ -106,7 +106,7 @@ overlays['workspace-no-contract'] = {
  *
  * @type {readonly string[]}
  */
-export const DATA_FRAMEWORKS = ['nest', 'fastify'];
+export const DATA_FRAMEWORKS = ['nest', 'fastify', 'fastapi'];
 
 /** @type {readonly string[]} */
 export const DATA_STORES = ['postgres', 'sqlite'];

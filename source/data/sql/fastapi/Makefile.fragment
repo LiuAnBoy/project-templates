@@ -1,0 +1,13 @@
+.PHONY: db-generate db-migrate db-status
+
+# Write a migration from the models into alembic/versions/ (m="message"); read it before committing it.
+db-generate:
+	uv run --frozen alembic revision --autogenerate -m "$(or $(m),schema change)"
+
+# Apply every migration the database has not recorded, and print what ran.
+db-migrate:
+	uv run --frozen python scripts/db_migrate.py
+
+# List the migrations that are still pending; never writes.
+db-status:
+	uv run --frozen python scripts/db_status.py
