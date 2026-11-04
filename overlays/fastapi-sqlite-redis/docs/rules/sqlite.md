@@ -31,7 +31,7 @@ SQLite is accessed through SQLAlchemy 2 on `aiosqlite`, with Alembic for migrati
 - Every migration runs in one transaction, DDL included, so a revision that fails halfway leaves nothing behind, not even its record, and a rerun after the fix applies it whole.
 - A database that recorded a revision this checkout does not contain is ahead of it (an older release deployed over a newer one). `make db-migrate` and `make db-status` print a warning, treat nothing as pending, and apply nothing.
 - `make db-status` lists the migrations that are still pending and never writes. A missing file means nothing is applied, and a project with no table yet has nothing pending. Several heads on disk fail it.
-- `make db-generate` compares the models with the database, so the database must be at head, and it creates the empty file when it is missing. The revision it writes passes `make lint` and `make format-check` for any message: its imports are sorted and it is formatted, and `alembic/versions/` is exempt from the docstring and line-length rules because the docstring is the message.
+- `make db-generate` compares the models with the database, so the database must be at head, and it creates the empty file when it is missing. The revision it writes passes `make lint` and `make format-check` for a message with no backslash or triple quote: its imports are sorted and it is formatted, and `alembic/versions/` is exempt from the docstring and line-length rules because the docstring is the message.
 - Run `make db-migrate` once per deploy, before the new code starts, while the server is stopped or idle.
 
 ### Branches and heads
