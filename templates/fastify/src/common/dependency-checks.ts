@@ -119,17 +119,37 @@ export function createHealthProbe(
   let inFlight: Promise<boolean> | undefined;
   let cached: { healthy: boolean; until: number } | undefined;
 
+  /**
+   * One run of every check. The result is cached before the callback runs, and
+   * `inFlight` is cleared in `finally`, so a throwing `onFailure` can neither
+   * change the answer nor leave a rejected promise behind for later callers.
+   *
+   * @returns Whether every check passed.
+   */
+  const run = async (): Promise<boolean> => {
+    try {
+      const failed = await failedChecks(checks, timeoutMs);
+      const healthy = failed.length === 0;
+      cached = { healthy, until: Date.now() + cacheMs };
+      if (!healthy) {
+        try {
+          options.onFailure?.(failed);
+        } catch {
+          // A failing log callback must not change what the probe answers.
+        }
+      }
+      return healthy;
+    } finally {
+      inFlight = undefined;
+    }
+  };
+
   return () => {
     if (checks.length === 0) return Promise.resolve(true);
     if (cached && Date.now() < cached.until) {
       return Promise.resolve(cached.healthy);
     }
-    inFlight ??= failedChecks(checks, timeoutMs).then((failed) => {
-      if (failed.length > 0) options.onFailure?.(failed);
-      cached = { healthy: failed.length === 0, until: Date.now() + cacheMs };
-      inFlight = undefined;
-      return cached.healthy;
-    });
+    inFlight ??= run();
     return inFlight;
   };
 }

@@ -79,6 +79,22 @@ describe('health probe', () => {
 
     expect(await probe()).toBe(false);
   });
+
+  it('answers from the checks when the failure callback throws, and keeps working', async () => {
+    const { check, state } = counting('fail');
+    const probe = createHealthProbe([check], {
+      cacheMs: 20,
+      onFailure: () => {
+        throw new Error('log sink is down');
+      },
+    });
+
+    expect(await probe()).toBe(false);
+
+    await sleep(40);
+    expect(await probe()).toBe(false);
+    expect(state.runs).toBe(2);
+  });
 });
 
 describe('startup checks', () => {

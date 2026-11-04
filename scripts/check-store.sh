@@ -66,9 +66,10 @@ READY_TIMEOUT="${LIVE_TIMEOUT:-90}"
 
 # Where an overlay keeps the pieces the lifecycle step writes into. Both layouts
 # are defined by the store layers; change them here if a layer moves.
-# The probe's export uses a `.js` specifier, which nodenext requires, so the
-# overlay's drizzle.config.ts must load a schema entry written that way (or read
-# the whole folder).
+# The probe's export in the schema entry uses a `.js` specifier, which nodenext
+# requires. drizzle-kit 0.31.11 loads such an entry (tried with `generate` on the
+# overlays' empty entry plus the probe), so drizzle.config.ts names the entry file
+# and needs no special reading of the folder.
 NODE_SCHEMA_DIR="src/db/schema"
 NODE_MIGRATIONS_GLOB="drizzle/*.sql"
 PY_MODELS_DIR="src/db/models"
@@ -198,7 +199,7 @@ project_run() {
 }
 
 # run_bounded <seconds> <log> <command...>: run in the project with an empty
-# environment (PATH, HOME, TMPDIR and RUN_ENV only), at most that long. Sets
+# environment (PATH, HOME, TMPDIR, PORT and RUN_ENV only), at most that long. Sets
 # BOUND_RC to the exit status, or 124 when it was still running and was killed.
 run_bounded() {
   secs="$1"
@@ -246,6 +247,19 @@ wait_health() {
     kill -0 "$SERVER_PID" 2>/dev/null || return 1
     sleep 0.5
   done
+}
+
+# health_fail <message>: report a health wait that failed, with the server log, and say
+# whether the server had exited or was still running (a timeout).
+health_fail() {
+  if kill -0 "$SERVER_PID" 2>/dev/null; then
+    fail_log "$WORK/outage.log" "$1 (the server was still running: a timeout)"
+  else
+    { wait "$SERVER_PID"; } 2>/dev/null
+    exit_status=$?
+    SERVER_PID=""
+    fail_log "$WORK/outage.log" "$1 (the server exited with status $exit_status)"
+  fi
 }
 
 # leak_values: print every value of the project's `.env` that must never reach the output.
@@ -533,22 +547,14 @@ step8_outage() {
   if [ "$HAS_COMPOSE" -ne 1 ]; then echo "--- 8. outage after startup: none (no service to stop)"; return 0; fi
   echo "--- 8. outage after startup"
   start_server "$WORK/outage.log"
-  READY=0
-  i=0
-  while [ "$i" -lt "$READY_TIMEOUT" ]; do
-    if ! kill -0 "$SERVER_PID" 2>/dev/null; then
-      fail_log "$WORK/outage.log" "the server exited before it was ready" || return 1
-    fi
-    [ "$(http_code /api/health)" = 200 ] && READY=1 && break
-    sleep 1
-    i=$((i + 1))
-  done
-  [ "$READY" -eq 1 ] || { fail_log "$WORK/outage.log" "health did not answer 200 within ${READY_TIMEOUT}s" || return 1; }
+  if ! wait_health 200 "$READY_TIMEOUT"; then
+    health_fail "health did not answer 200 within ${READY_TIMEOUT}s" || return 1
+  fi
   for svc in $SERVICES; do
     compose_do stop "$svc" >/dev/null || { fail "could not stop $svc" || return 1; }
-    wait_health 503 "$HEALTH_BOUND" || { fail "health did not answer 503 within ${HEALTH_BOUND}s with $svc stopped" || return 1; }
+    wait_health 503 "$HEALTH_BOUND" || { health_fail "health did not answer 503 within ${HEALTH_BOUND}s with $svc stopped" || return 1; }
     [ "$(cat "$WORK/body")" = '{"status":"unavailable"}' ] ||
-      { fail "health body with $svc stopped is not exactly {\"status\":\"unavailable\"}: $(cat "$WORK/body")" || return 1; }
+      { fail_log "$WORK/outage.log" "health body with $svc stopped is not exactly {\"status\":\"unavailable\"}: $(cat "$WORK/body")" || return 1; }
     say "with $svc stopped health answers 503 {\"status\":\"unavailable\"}"
     if [ "$svc" = redis ]; then
       code="$(http_code /api/v1/hello)"
@@ -559,8 +565,8 @@ step8_outage() {
       say "with redis stopped hello answers the 503 failure envelope"
     fi
     compose_do up -d --wait >/dev/null || { fail "could not start $svc again" || return 1; }
-    wait_health 200 "$READY_TIMEOUT" || { fail "health did not recover to 200 after $svc came back" || return 1; }
-    kill -0 "$SERVER_PID" 2>/dev/null || { fail_log "$WORK/outage.log" "the server ended during the $svc outage" || return 1; }
+    wait_health 200 "$READY_TIMEOUT" || { health_fail "health did not recover to 200 after $svc came back" || return 1; }
+    kill -0 "$SERVER_PID" 2>/dev/null || { health_fail "the server ended during the $svc outage" || return 1; }
     say "with $svc back health answers 200 and the process never ended"
   done
   stop_server

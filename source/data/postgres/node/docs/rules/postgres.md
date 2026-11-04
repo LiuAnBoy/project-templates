@@ -7,10 +7,12 @@ PostgreSQL is accessed through Drizzle. The Drizzle schema, written in TypeScrip
 - The server reads `DATABASE_URL`, a plain `postgresql://` URL, and nothing in code names a host or a credential. A missing value stops the boot, naming the variable.
 - `POSTGRES_DATABASE` is the plain database name. Compose uses it to create the database, and on a shared cluster it must name a database that exists there, because a wrong value blocks registering the service.
 - `POSTGRES_USER`, `POSTGRES_PASSWORD` and `POSTGRES_PORT` serve compose; the server reads only the URL. A project moves to another server by changing `.env` alone.
+- `src/db/database.ts` is the one file that names PostgreSQL. It exports `createDatabase(config)`, which returns the Drizzle client, the transaction runner, a probe and a close, and the `src/infra/` seam calls it once. Never open a second pool.
+- `TEST_DATABASE_URL` is read only by `pnpm test:integration`, which refuses a host that is not local and works in a throwaway schema of its own.
 
 ## Schema and migrations
 
-- The schema lives in TypeScript under `src/db/schema/`, one file per aggregate. Nothing else defines a table.
+- The schema lives in TypeScript under `src/db/schema/`, one file per aggregate, each exported from `src/db/schema/index.ts`. Nothing else defines a table.
 - Write every column name explicitly in snake_case (`timestamp('created_at', ...)`), so the SQL names never depend on a casing option.
 - After changing the schema run `pnpm db:generate`. It writes SQL into `drizzle/`. Read that SQL in review like code, and commit it together with the schema change.
 - Never run `drizzle-kit push` on a shared database: it changes the schema without leaving a migration to review or replay.
@@ -21,25 +23,25 @@ PostgreSQL is accessed through Drizzle. The Drizzle schema, written in TypeScrip
 
 ### Baseline
 
-- Before the project's first production deploy there is one baseline. While nothing is deployed, a schema change regenerates it: remove the generated migrations (the `0000_init` SQL file in `drizzle/` and `drizzle/meta/`) and run `pnpm db:generate` again, so the first deploy applies a single file.
+- Before the project's first production deploy there is one baseline. While nothing is deployed, a schema change regenerates it: remove the generated migrations (the `0000_` SQL file in `drizzle/` and `drizzle/meta/`) and run `pnpm db:generate` again, so the first deploy applies a single file.
 - After the first production deploy the baseline never changes. Every schema change is a new generated migration, reviewed and committed.
 
 ### Applying and tracking
 
 - Drizzle records what ran in `drizzle.__drizzle_migrations`; `drizzle/meta/_journal.json` lists the migrations that exist. Nothing keeps its own list by hand.
-- `pnpm db:migrate` is the only way a shared database changes. It applies only what is not recorded, does nothing when the database is up to date, and prints the names it applied, so a deploy log shows which files ran instead of a silent success.
-- `pnpm db:status` lists the migrations that are still pending.
+- `pnpm db:migrate` is the only way a shared database changes. It applies only what is not recorded, does nothing when the database is up to date, and prints the counts, the names it applied and the record afterwards, so a deploy log shows which files ran instead of a silent success. It is a plain Node script, so a deploy image without dev dependencies can run it.
+- `pnpm db:status` lists the migrations that are still pending and never writes. A project with no table yet has none, and both commands say so.
 - Run `pnpm db:migrate` once per deploy, before the new code starts. Two runners against one database at once are not guarded.
 
 ### Branches and the journal
 
-Drizzle's migrator applies a migration only when its journal `when` is newer than the newest one recorded in the database. A migration generated on a branch and merged after a newer one has already run is therefore skipped silently, with no error. Generate on top of the latest trunk right before merging, and regenerate the migration if the trunk gained one in the meantime.
+Drizzle's migrator applies a migration only when its journal `when` is newer than the newest one recorded in the database. A migration generated on a branch and merged after a newer one has already run would be skipped silently, with no error. Both scripts detect that case, name the migration and exit 1. Generate on top of the latest trunk right before merging, and regenerate the migration if the trunk gained one in the meantime.
 
 ## Repositories and transactions
 
 - SQL appears only in repositories. Controllers, routes and services never build a query. A query has one place to review and to change when the schema moves.
 - Drizzle builds the queries. Raw SQL through Drizzle's `sql` tag is fine in a repository when the builder cannot express the query.
-- The service owns the transaction scope. It opens the transaction with a small injectable `TransactionRunner.run(tx => ...)` that wraps Drizzle's `db.transaction`, passes the transaction handle explicitly to every repository call inside it, and commits or rolls back. Do not use AsyncLocalStorage or request-scoped repositories: a mistake there does not throw, it silently loses atomicity.
+- The service owns the transaction scope. It opens the transaction with the runner from `createDatabase`, `transactions.run(tx => ...)` (the `TRANSACTION_RUNNER` token on Nest, `infra.transactions` on Fastify), passes the transaction handle explicitly to every repository call inside it, and commits or rolls back. Do not use AsyncLocalStorage or request-scoped repositories: a mistake there does not throw, it silently loses atomicity.
 - A repository method that writes takes the caller's handle as a required parameter. A write that silently falls back to the pool client commits outside the transaction its caller believes it is in.
 - A read may default to the pool when no transaction is open.
 - Counting or deleting under a lock is the one case where a repository may open its own transaction, when the transaction is the whole operation. Say so in its doc comment.

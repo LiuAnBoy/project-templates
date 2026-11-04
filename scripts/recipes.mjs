@@ -105,10 +105,10 @@ overlays['workspace-no-contract'] = {
  *
  * @type {readonly string[]}
  */
-export const DATA_FRAMEWORKS = [];
+export const DATA_FRAMEWORKS = ['nest', 'fastify'];
 
 /** @type {readonly string[]} */
-export const DATA_STORES = [];
+export const DATA_STORES = ['postgres', 'sqlite'];
 
 /**
  * What a store needs from the layer structure: `sql` stores share the
