@@ -16,8 +16,9 @@
  * Target types, detected from manifests: web (next or vite dependency, plain
  * or UI variant by library dependency), nest, fastify, fastapi, workspace
  * (pnpm-workspace.yaml plus contract/package.json) and monorepo (a composed
- * root holding web/ and server/, optional contract/, and docs/). A monorepo
- * is checked part by part, each part as its own type.
+ * root holding web/ and server/, optional dashboard/ and contract/, and
+ * docs/). A monorepo is checked part by part, each part as its own type;
+ * contract/ needs only its package.json, not a CLAUDE.md.
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -126,7 +127,9 @@ export const REQUIRED_WORKSPACE = [
 /** Required paths of every standalone target (not of parts inside a monorepo). */
 export const REQUIRED_STANDALONE = ['AGENTS.md', '.gitignore'];
 /** Required paths of a composed monorepo root. */
-export const REQUIRED_MONOREPO_ROOT = ['AGENTS.md', '.gitignore', 'docs/README.md'];
+export const REQUIRED_MONOREPO_ROOT = ['AGENTS.md', 'CLAUDE.md', '.gitignore', 'docs/README.md'];
+/** The parts of a monorepo that hold a template; `dashboard` is optional. */
+const MONOREPO_PARTS = ['web', 'dashboard', 'server'];
 
 /**
  * Walk a directory and return files whose names satisfy a predicate.
@@ -374,16 +377,20 @@ function checkMonorepo(dir) {
   }
   const hasContract = fs.existsSync(path.join(dir, 'contract'));
   if (hasContract) out.push(...checkPaths(dir, ['contract/package.json', 'docs/contract.md'], [], ''));
-  for (const part of ['web', 'server']) {
+  for (const part of MONOREPO_PARTS) {
     const partDir = path.join(dir, part);
+    if (part === 'dashboard' && !fs.existsSync(partDir)) continue;
     const type = detectType(partDir);
+    const wantsWeb = part !== 'server';
     if (type === null || type === 'monorepo' || type === 'workspace') {
       out.push(`${part}/: cannot detect a web or server template (check package.json dependencies or pyproject.toml)`);
-    } else if ((part === 'web') !== type.startsWith('web')) {
-      out.push(`${part}/: holds a ${type} template, expected ${part === 'web' ? 'a web' : 'a server'} template`);
+    } else if (wantsWeb !== type.startsWith('web')) {
+      out.push(`${part}/: holds a ${type} template, expected ${wantsWeb ? 'a web' : 'a server'} template`);
     } else out.push(...checkPart(partDir, type, `${part}/`, false));
   }
-  out.push(...checkLinks(dir, '').filter((v) => !v.startsWith('web/') && !v.startsWith('server/')));
+  out.push(
+    ...checkLinks(dir, '').filter((v) => !MONOREPO_PARTS.some((part) => v.startsWith(`${part}/`))),
+  );
   return out;
 }
 

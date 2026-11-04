@@ -23,7 +23,9 @@
  *   - An overlay (recipes `overlays` export: {base, layers}) copies only its own
  *     layers, but its package.json merges the fragments of its base template's
  *     layers and its own, and is named after the base so the project can extend
- *     it as its own.
+ *     it as its own. An overlay that replaces its base's manifest or documents
+ *     outright names `fragmentLayers` and `agentsLayers` itself, and then only
+ *     those layers contribute.
  *   - Existing root pnpm-lock.yaml and uv.lock in the target are preserved.
  *   - --check ignores those lockfiles and build leftovers listed in IGNORED.
  */
@@ -316,9 +318,9 @@ async function main(argv) {
       layers: overlay.layers,
       options: {
         packageName: overlay.base,
-        fragmentLayers: [...baseLayers, ...overlay.layers],
+        fragmentLayers: overlay.fragmentLayers ?? [...baseLayers, ...overlay.layers],
         // The base's blocks without the no-library block, so the result is the whole file.
-        agentsLayers: [
+        agentsLayers: overlay.agentsLayers ?? [
           ...baseLayers.filter((layer) => layer !== 'source/ui/plain'),
           ...overlay.layers,
         ],

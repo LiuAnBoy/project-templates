@@ -1,7 +1,8 @@
 # The workspace packages. Missing directories are ignored, so the file is valid
-# before web/ and server/ exist.
+# before web/, dashboard/ and server/ exist.
 packages:
   - web
+  - dashboard
   - server
   - contract
 

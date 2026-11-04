@@ -1,0 +1,15 @@
+# The workspace packages: the web apps only. The server is a Python project
+# managed by uv, and there is no shared contract package. Missing directories
+# are ignored, so the file is valid whichever of the two web apps exist.
+packages:
+  - web
+  - dashboard
+
+# Dependencies allowed to run install scripts: the union every web template
+# needs. pnpm blocks all others, so a library added later that prints "Ignored
+# build scripts" must be added here.
+onlyBuiltDependencies:
+  - '@tailwindcss/oxide'
+  - esbuild
+  - sharp
+  - unrs-resolver

@@ -16,6 +16,7 @@
  *   server/node           files shared by the Node backends (nest, fastify)
  *   server/<name>         framework layer of one backend (nest, fastify, fastapi)
  *   workspace             the monorepo root with the contract package
+ *   workspace-no-contract the root of a monorepo whose server is not a Node project
  *
  * A template renders to `templates/<name>`. An overlay renders to
  * `overlays/<name>` and holds only the files of its own layers plus a
@@ -74,5 +75,19 @@ for (const framework of WEB_FRAMEWORKS) {
     };
   }
 }
+
+/**
+ * The monorepo root for a server that has no contract package (FastAPI). It is
+ * applied by monorepo.sh over the `workspace` template after `contract/` and
+ * `docs/contract.md` are removed, and replaces the manifest, the workspace file
+ * and the root documents, so those state only what exists. It lives under
+ * `overlays/`, which keeps it out of a standalone `workspace` fetch.
+ */
+overlays['workspace-no-contract'] = {
+  base: 'workspace',
+  layers: ['source/workspace-no-contract'],
+  fragmentLayers: ['source/workspace-no-contract'],
+  agentsLayers: ['source/workspace-no-contract'],
+};
 
 export default recipes;

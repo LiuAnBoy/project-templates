@@ -91,10 +91,11 @@ function make(kind) {
 /**
  * Build a composed monorepo fixture.
  *
- * @param {boolean} withContract Whether to include contract/.
+ * @param {boolean} withContract Whether to include contract/ (it has no CLAUDE.md).
+ * @param {boolean} [withDashboard] Whether to include dashboard/.
  * @returns {string} Fixture directory.
  */
-function makeMonorepo(withContract) {
+function makeMonorepo(withContract, withDashboard = false) {
   counter += 1;
   const dir = path.join(base, `mono-${counter}`);
   fs.mkdirSync(dir, { recursive: true });
@@ -104,7 +105,9 @@ function makeMonorepo(withContract) {
   fs.renameSync(server, path.join(dir, 'server'));
   fs.rmSync(path.join(dir, 'web/AGENTS.md'));
   fs.rmSync(path.join(dir, 'server/AGENTS.md'));
+  if (withDashboard) fs.renameSync(make('web-plain'), path.join(dir, 'dashboard'));
   put(path.join(dir, 'AGENTS.md'), '# Rules\n');
+  put(path.join(dir, 'CLAUDE.md'), '@AGENTS.md\n');
   put(path.join(dir, '.gitignore'), '.env*\n!.env.example\n');
   put(path.join(dir, 'docs/README.md'), '# 產品規則\n');
   if (withContract) {
@@ -247,6 +250,19 @@ test('a composed monorepo fails on a missing root doc, root .env ignore and cont
   dir = makeMonorepo(false);
   fs.rmSync(path.join(dir, 'docs/README.md'));
   failsWith(dir, /docs\/README\.md: required path missing/);
+});
+
+test('a composed monorepo with a dashboard checks it like web, and needs a root CLAUDE.md', () => {
+  passes(makeMonorepo(true, true));
+  let dir = makeMonorepo(true, true);
+  fs.rmSync(path.join(dir, 'dashboard/docs/rules/ui.md'));
+  failsWith(dir, /dashboard\/docs\/rules\/ui\.md: required path missing/);
+  dir = makeMonorepo(true, true);
+  put(path.join(dir, 'dashboard/docs/README.md'), '[x](./missing.md) 索引\n');
+  failsWith(dir, /dashboard\/docs\/README\.md: broken link/);
+  dir = makeMonorepo(false);
+  fs.rmSync(path.join(dir, 'CLAUDE.md'));
+  failsWith(dir, /CLAUDE\.md: required path missing/);
 });
 
 test('a name that is not a directory resolves to templates/<name> and fails when absent', () => {

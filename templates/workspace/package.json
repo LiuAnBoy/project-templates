@@ -8,6 +8,7 @@
   },
   "scripts": {
     "prepare": "pnpm --filter @app/contract run build",
+    "dev": "pnpm -r --parallel --if-present run dev",
     "build": "pnpm -r --if-present run build",
     "lint": "pnpm -r --if-present run lint",
     "format": "pnpm -r --if-present run format",

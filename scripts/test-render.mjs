@@ -321,6 +321,21 @@ test('an overlay with an unknown base fails', () => {
   assert.match(result.out, /unknown base "zzz"/);
 });
 
+test('an overlay that names its fragment and AGENTS layers drops the base contributions', () => {
+  const fx = fixture();
+  fs.appendFileSync(
+    fx.recipes,
+    "overlays.solo = { base: 'ab', layers: ['source/o'], fragmentLayers: ['source/o'], agentsLayers: ['source/o'] };\n",
+  );
+  assert.equal(render(fx, ['--only', 'solo']).code, 0);
+  const dir = path.join(fx.root, 'overlays/solo');
+  const pkg = JSON.parse(fs.readFileSync(path.join(dir, 'package.json'), 'utf8'));
+  assert.equal(pkg.name, 'ab');
+  assert.deepEqual(pkg.scripts, { lint: 'o-lint' });
+  assert.deepEqual(Object.keys(pkg.dependencies), ['omega']);
+  assert.equal(fs.readFileSync(path.join(dir, 'AGENTS.md'), 'utf8'), '## O\n\nblock o\n');
+});
+
 let failed = 0;
 for (const [name, fn] of tests) {
   try {
