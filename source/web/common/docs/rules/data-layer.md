@@ -25,6 +25,7 @@ Server state goes through React Query, over module api functions, over one HTTP 
 - No answer throws `NetworkError`. No answer within the timeout throws `TimeoutError`, a subclass of `NetworkError`, so one `instanceof NetworkError` covers both and `instanceof TimeoutError` tells them apart.
 - A cancelled request (aborted `signal`) rejects with axios's `CanceledError`, untouched. Check it with `isCancel` from axios inside the code that cancelled; do not report it as a failure.
 - `getErrorMessage(error, fallback?)` returns the text to show: the server's message for an `HttpError`, a fixed text for a transport failure, the fallback otherwise. The UI shows it as is; the server owns user-facing wording.
+- An error nobody handles reaches the framework's error page (`architecture.md`), which shows the fixed text of `ErrorState` and logs the error with `console.error`. Never show an error's message, stack or digest there. An unknown address shows the not-found page, which is `ErrorState` with `kind="not-found"`.
 
 ### Token and 401
 

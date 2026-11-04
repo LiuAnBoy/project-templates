@@ -36,15 +36,16 @@
 ```
 src/
   main.tsx        進入點
-  app/            App.tsx（providers 與 router）、router.tsx
+  app/            App.tsx（錯誤邊界、providers 與 router）、router.tsx、ErrorBoundary.tsx、RouteError.tsx
   modules/home/   首頁模組（components、tests、routes.tsx、index.ts）
   shared/
+    components/   ErrorState：整頁的錯誤與找不到頁面畫面
     http/         HTTP 封裝、錯誤型別與測試
     hooks/        共用 hook（清單見 components/README.md）
     providers/    AppProviders、QueryProvider、UiProvider
     styles/       theme.ts（全站樣式的唯一來源）與 global.css（見 styles.md）
     utils/        date.ts：日期處理物件，唯一匯入 dayjs 的檔案
-  test/setup.ts   Vitest 設定
+  test/           Vitest 設定、renderWithProviders、matchMedia 替身
 tests/e2e/        Playwright 規格
 ```
 

@@ -13,8 +13,7 @@
  *   - the required paths of the target's type exist (REQUIRED_* below)
  *   - .gitignore covers `.env`
  *
- * Target types, detected from manifests: web (next or vite dependency, plain
- * or UI variant by library dependency), nest, fastify, fastapi, workspace
+ * Target types, detected from manifests: web (next or vite dependency), nest, fastify, fastapi, workspace
  * (pnpm-workspace.yaml plus contract/package.json) and monorepo (a composed
  * root holding web/ and server/, optional dashboard/ and contract/, and
  * docs/). A monorepo is checked part by part, each part as its own type;
@@ -54,7 +53,7 @@ const RULES_SERVER = [
   'docs-to-update',
 ].map((n) => `docs/rules/${n}.md`);
 
-/** Paths every web template needs, whatever its UI variant. */
+/** Paths every web template needs, whatever its UI variant (plain or an overlay). */
 export const REQUIRED_WEB = [
   'CLAUDE.md',
   'docs/README.md',
@@ -63,28 +62,24 @@ export const REQUIRED_WEB = [
   'docs/components/http-client.md',
   'docs/components/useMediaQuery.md',
   'docs/components/date.md',
+  'docs/components/useNotification.md',
+  'docs/components/ErrorState.md',
+  'docs/components/test-helpers.md',
   ...RULES_WEB,
   'src/app',
   'src/modules/home/index.ts',
   'src/shared/http/http.ts',
   'src/shared/http/errors.ts',
   'src/shared/hooks/useMediaQuery.ts',
+  'src/shared/hooks/useNotification.ts',
+  'src/shared/components/ErrorState.tsx',
+  'src/test/renderWithProviders.tsx',
+  'src/test/matchMedia.ts',
   'src/shared/utils/date.ts',
   'src/shared/providers/UiProvider.tsx',
   'src/shared/providers/ThemeVariables.tsx',
   'src/shared/styles/theme.ts',
 ];
-/** Extra paths of a UI-library web template. */
-export const REQUIRED_WEB_UI = [
-  'docs/components/useNotification.md',
-  'src/shared/hooks/useNotification.ts',
-];
-/** Paths that a plain web template must not have. */
-export const FORBIDDEN_WEB_PLAIN = [
-  'docs/components/useNotification.md',
-  'src/shared/hooks/useNotification.ts',
-];
-
 const SERVER_DOCS = [
   'CLAUDE.md',
   'docs/README.md',
@@ -182,7 +177,7 @@ function deps(dir) {
  * Detect what kind of target a directory is.
  *
  * @param {string} dir Target directory.
- * @returns {'monorepo' | 'workspace' | 'fastapi' | 'nest' | 'fastify' | 'web-plain' | 'web-ui' | null} Type.
+ * @returns {'monorepo' | 'workspace' | 'fastapi' | 'nest' | 'fastify' | 'web' | null} Type.
  */
 export function detectType(dir) {
   const has = (p) => fs.existsSync(path.join(dir, p));
@@ -192,12 +187,7 @@ export function detectType(dir) {
   const d = deps(dir);
   if (d.has('@nestjs/core')) return 'nest';
   if (d.has('fastify')) return 'fastify';
-  if (d.has('next') || d.has('vite')) {
-    const ui = [...d].some(
-      (n) => n === 'antd' || n === '@mui/material' || n.startsWith('@heroui/'),
-    );
-    return ui ? 'web-ui' : 'web-plain';
-  }
+  if (d.has('next') || d.has('vite')) return 'web';
   return null;
 }
 
@@ -311,21 +301,17 @@ function checkLanguage(dir, label) {
 }
 
 /**
- * Check that required paths exist and forbidden ones do not.
+ * Check that required paths exist.
  *
  * @param {string} dir Directory to check.
  * @param {string[]} required Relative paths that must exist.
- * @param {string[]} forbidden Relative paths that must not exist.
  * @param {string} label Prefix for violation messages.
  * @returns {string[]} Violations.
  */
-function checkPaths(dir, required, forbidden, label) {
+function checkPaths(dir, required, label) {
   const out = [];
   for (const rel of required) {
     if (!fs.existsSync(path.join(dir, rel))) out.push(`${label}${rel}: required path missing`);
-  }
-  for (const rel of forbidden) {
-    if (fs.existsSync(path.join(dir, rel))) out.push(`${label}${rel}: must not exist in this variant`);
   }
   return out;
 }
@@ -341,17 +327,13 @@ function checkPaths(dir, required, forbidden, label) {
  */
 function checkPart(dir, type, label, standalone) {
   let required = [];
-  let forbidden = [];
-  if (type === 'web-plain') {
-    required = REQUIRED_WEB;
-    forbidden = FORBIDDEN_WEB_PLAIN;
-  } else if (type === 'web-ui') required = [...REQUIRED_WEB, ...REQUIRED_WEB_UI];
+  if (type === 'web') required = REQUIRED_WEB;
   else if (type === 'workspace') required = REQUIRED_WORKSPACE;
   else required = REQUIRED_SERVER[type];
   if (standalone) required = [...REQUIRED_STANDALONE, ...required];
 
   const out = [
-    ...checkPaths(dir, required, forbidden, label),
+    ...checkPaths(dir, required, label),
     ...checkLanguage(dir, label),
     ...checkLinks(dir, label),
   ];
@@ -369,14 +351,14 @@ function checkPart(dir, type, label, standalone) {
  */
 function checkMonorepo(dir) {
   const out = [
-    ...checkPaths(dir, REQUIRED_MONOREPO_ROOT, [], ''),
+    ...checkPaths(dir, REQUIRED_MONOREPO_ROOT, ''),
     ...checkLanguage(dir, ''),
   ];
   if (fs.existsSync(path.join(dir, '.gitignore')) && !gitignoreCoversEnv(path.join(dir, '.gitignore'))) {
     out.push('.gitignore: does not cover .env');
   }
   const hasContract = fs.existsSync(path.join(dir, 'contract'));
-  if (hasContract) out.push(...checkPaths(dir, ['contract/package.json', 'docs/contract.md'], [], ''));
+  if (hasContract) out.push(...checkPaths(dir, ['contract/package.json', 'docs/contract.md'], ''));
   for (const part of MONOREPO_PARTS) {
     const partDir = path.join(dir, part);
     if (part === 'dashboard' && !fs.existsSync(partDir)) continue;

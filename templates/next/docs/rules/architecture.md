@@ -6,7 +6,7 @@ One tree, three layers. The framework decides what `app/` holds; `modules/` and 
 
 ```
 src/
-  app/                      thin routes: layout.tsx, page.tsx, route groups, loading and error files
+  app/                      thin routes: layout.tsx, page.tsx, route groups, loading and error files, not-found.tsx
   modules/<feature>/        one folder per feature
     components/             UI only this feature uses
     hooks/                  query and mutation hooks
@@ -17,16 +17,17 @@ src/
     index.ts                the module's public surface
   shared/
     components/             reusable UI, indexed in docs/components/README.md
-    hooks/                  hooks with no feature knowledge (useMediaQuery)
+    hooks/                  hooks with no feature knowledge (useMediaQuery, useNotification)
     http/                   the axios wrapper, its error types and tests
     providers/              AppProviders, QueryProvider, UiProvider (the UI library slot)
+    seo/                    site.ts (the one site constant) and pageMetadata
     styles/                 theme.ts (the one source of site-wide style values) and the global stylesheet
     utils/                  pure helpers
-  test/setup.ts             Vitest setup
+  test/                     Vitest setup, renderWithProviders, matchMedia stub
 tests/e2e/                  Playwright specs
 ```
 
-A folder exists only when it holds a file; the tree above is the target shape, and a folder is created when its first file is. Today `modules/home/` holds `components/`, `tests/` and `index.ts`, and `shared/` holds `http/`, `hooks/`, `providers/`, `styles/` and `utils/`.
+A folder exists only when it holds a file; the tree above is the target shape, and a folder is created when its first file is. Today `modules/home/` holds `components/`, `tests/` and `index.ts`, and `shared/` holds `components/`, `http/`, `hooks/`, `providers/`, `seo/`, `styles/` and `utils/`.
 
 Why: a feature is deleted or moved as one folder, and a reader finds a thing by asking which feature owns it.
 
@@ -60,6 +61,18 @@ Why: a feature is deleted or moved as one folder, and a reader finds a thing by 
 - Providers are client components composed in `shared/providers/AppProviders.tsx` and mounted once in `app/layout.tsx`. Add a provider to `AppProviders`, never beside it.
 - React Query hooks from `modules/*/hooks` are client-only. A server component fetches through the same api function, because `shared/http/base-url.ts` resolves the base to an absolute URL on the server (`API_HOST`, default `http://localhost:8000`, plus `/api/v1`) and keeps it relative in the browser; or it passes initial data to a client component. Server-side calls do not carry the browser's token: pass what the call needs explicitly.
 - A file that must never reach the browser imports `server-only`; tests alias that import to an empty module.
+
+### Error and not-found pages
+
+- `app/error.tsx` is the boundary of every route below the root layout, `app/global-error.tsx` is the last boundary for an error in the root layout itself (it replaces the layout, so it renders its own `<html>` and `<body>`), and `app/not-found.tsx` answers an address that matches no route. All three render `ErrorState` and nothing else.
+- An error page logs the error with `console.error` in an effect and offers `reset` as the retry. It never shows the error's message, stack or `digest`.
+- Styles come from `theme.ts` through `ErrorState`, never a literal in these files.
+
+### Page metadata
+
+- `shared/seo/site.ts` holds the one `SITE` constant (title, description, public origin). The root layout reads it for `metadataBase` and the title template, and `pageMetadata` reads it for the defaults.
+- A public page exports `metadata = pageMetadata({ path: '/...' })` with its `title`, `description`, `type` and `image` when they differ from the site's. The helper sets the canonical link, Open Graph and Twitter together, because a page-level `openGraph` or `twitter` replaces the layout's whole object. `app/page.tsx` is the example.
+- Change `SITE.url` to the real origin when the project is created; canonical and Open Graph links resolve against it.
 
 ### The API proxy
 

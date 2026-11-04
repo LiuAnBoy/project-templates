@@ -12,7 +12,6 @@ import { fileURLToPath } from 'node:url';
 import {
   REQUIRED_SERVER,
   REQUIRED_WEB,
-  REQUIRED_WEB_UI,
   REQUIRED_WORKSPACE,
 } from './check-docs.mjs';
 
@@ -51,7 +50,7 @@ function touch(dir, rel) {
 /**
  * Build a clean fixture of the given kind.
  *
- * @param {'web-plain' | 'web-ui' | 'nest' | 'fastify' | 'fastapi' | 'workspace'} kind Kind.
+ * @param {'web' | 'nest' | 'fastify' | 'fastapi' | 'workspace'} kind Kind.
  * @returns {string} Fixture directory.
  */
 function make(kind) {
@@ -63,12 +62,9 @@ function make(kind) {
   const pkg = (dependencies) =>
     put(path.join(dir, 'package.json'), JSON.stringify({ name: kind, dependencies }));
   let required = [];
-  if (kind === 'web-plain') {
+  if (kind === 'web') {
     pkg({ next: '1.0.0' });
     required = REQUIRED_WEB;
-  } else if (kind === 'web-ui') {
-    pkg({ vite: '1.0.0', antd: '1.0.0' });
-    required = [...REQUIRED_WEB, ...REQUIRED_WEB_UI];
   } else if (kind === 'nest') {
     pkg({ '@nestjs/core': '1.0.0' });
     required = REQUIRED_SERVER.nest;
@@ -99,13 +95,13 @@ function makeMonorepo(withContract, withDashboard = false) {
   counter += 1;
   const dir = path.join(base, `mono-${counter}`);
   fs.mkdirSync(dir, { recursive: true });
-  const web = make('web-ui');
+  const web = make('web');
   const server = make('nest');
   fs.renameSync(web, path.join(dir, 'web'));
   fs.renameSync(server, path.join(dir, 'server'));
   fs.rmSync(path.join(dir, 'web/AGENTS.md'));
   fs.rmSync(path.join(dir, 'server/AGENTS.md'));
-  if (withDashboard) fs.renameSync(make('web-plain'), path.join(dir, 'dashboard'));
+  if (withDashboard) fs.renameSync(make('web'), path.join(dir, 'dashboard'));
   put(path.join(dir, 'AGENTS.md'), '# Rules\n');
   put(path.join(dir, 'CLAUDE.md'), '@AGENTS.md\n');
   put(path.join(dir, '.gitignore'), '.env*\n!.env.example\n');
@@ -152,7 +148,7 @@ function passes(dir) {
   assert.equal(r.code, 0, r.out);
 }
 
-const KINDS = ['web-plain', 'web-ui', 'nest', 'fastify', 'fastapi', 'workspace'];
+const KINDS = ['web', 'nest', 'fastify', 'fastapi', 'workspace'];
 /** @type {Array<[string, () => void]>} */
 const tests = [];
 /**
@@ -175,13 +171,13 @@ test('CJK in docs/rules fails', () => {
 });
 
 test('fullwidth punctuation in AGENTS.md fails', () => {
-  const dir = make('web-plain');
+  const dir = make('web');
   put(path.join(dir, 'AGENTS.md'), '# Rules\n\nUse this，not that.\n');
   failsWith(dir, /AGENTS\.md: contains CJK/);
 });
 
 test('an English record page fails', () => {
-  const dir = make('web-ui');
+  const dir = make('web');
   put(path.join(dir, 'docs/styles.md'), '# Styles\n\nEnglish only.\n');
   failsWith(dir, /docs\/styles\.md: has no Traditional Chinese/);
 });
@@ -196,8 +192,7 @@ test('a broken relative link fails, a link inside code does not', () => {
 
 test('a missing required path fails for each type', () => {
   const dirs = {
-    'web-plain': 'docs/components/http-client.md',
-    'web-ui': 'src/shared/hooks/useNotification.ts',
+    web: 'docs/components/http-client.md',
     nest: 'docs/rules/redis.md',
     fastify: 'src/server.ts',
     fastapi: 'docs/database.md',
@@ -210,10 +205,17 @@ test('a missing required path fails for each type', () => {
   }
 });
 
-test('a plain web template must not ship useNotification', () => {
-  const dir = make('web-plain');
-  touch(dir, 'docs/components/useNotification.md');
-  failsWith(dir, /useNotification\.md: must not exist/);
+test('a web template needs the notification hook, the error page and the test helpers', () => {
+  for (const rel of [
+    'src/shared/hooks/useNotification.ts',
+    'src/shared/components/ErrorState.tsx',
+    'src/test/renderWithProviders.tsx',
+    'docs/components/useNotification.md',
+  ]) {
+    const dir = make('web');
+    fs.rmSync(path.join(dir, rel));
+    failsWith(dir, new RegExp(`${rel.replace(/[.]/g, '\\.')}: required path missing`));
+  }
 });
 
 test('a missing .gitignore, or one not covering .env, fails', () => {

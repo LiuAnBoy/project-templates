@@ -24,6 +24,12 @@ Do not run a production build while developing. Typecheck and lint cover applica
 - The wrapper has its own tests, `src/shared/http/tests/http.test.ts`. They replace the transport by setting `httpClient.defaults.adapter`, and guard envelope unwrapping, the list helper, `HttpError` from a failure body, `NetworkError`, `TimeoutError`, cancellation passthrough, the 401 handler and the token provider. Keep them green when the wrapper changes.
 - Worth a test: a query-key factory (shape stability), a mutation's invalidation, form validation, and any logic that moves money or deletes data. Not worth one: presentational markup, library behaviour, what the type checker proves.
 
+### Test helpers
+
+- `src/test/renderWithProviders.tsx` renders a component inside the real `AppProviders`, so it works with any UI library and any `useNotification`. It adds a fresh `QueryClient` (`retry: false`, `gcTime: 0`) inside, so no cache leaks between tests, and returns it as `queryClient`. In a Vite project it also wraps a memory router and takes `route`. Prefer it over hand-built wrappers; a UI overlay that needs a different wrapper ships its own file at the same path.
+- `src/test/matchMedia.ts` installs a controllable `window.matchMedia`: `installMatchMedia(matching)` takes the queries that match at first, `set(query, matches)` flips one and notifies its listeners, `listenerCount(query)` counts them, and `restoreMatchMedia()` puts the original back (call it in `afterEach`). jsdom has no `matchMedia`, and UI libraries and `useMediaQuery` read it.
+- Error pages are guarded by a component test in `src/app/tests/` (a thrown error renders the error page, an unknown route renders not-found) and by `tests/e2e/not-found.spec.ts`.
+
 ## End to end: Playwright
 
 - `pnpm test:e2e` runs `playwright test`. The config starts the app itself on its own port (see `playwright.config.ts`), so nothing needs to be running, and it reuses a server already on that port only outside CI.

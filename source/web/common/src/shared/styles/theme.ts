@@ -13,6 +13,9 @@ export const palette = {
   text: '#0f172a',
   textSecondary: '#475569',
   border: '#e2e8f0',
+  success: '#16a34a',
+  warning: '#d97706',
+  danger: '#dc2626',
 };
 
 /** Corner radius in pixels. */

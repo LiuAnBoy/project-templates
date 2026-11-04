@@ -4,18 +4,21 @@
 
 ## 清單
 
-| 名稱              | 位置                              | 用途                                        | 文件                                       |
-| ----------------- | --------------------------------- | ------------------------------------------- | ------------------------------------------ |
-| `http`            | `shared/http/http.ts`             | 唯一的 API 入口，回傳解開 envelope 後的資料 | [http-client.md](./http-client.md)         |
-| `useMediaQuery`   | `shared/hooks/useMediaQuery.ts`   | 追蹤 CSS media query 是否符合               | [useMediaQuery.md](./useMediaQuery.md)     |
-| `date`            | `shared/utils/date.ts`            | 日期處理物件，唯一匯入 dayjs 的檔案         | [date.md](./date.md)                       |
-| `useNotification` | `shared/hooks/useNotification.ts` | 通知，底層是 HeroUI 的 `toast`              | [useNotification.md](./useNotification.md) |
-| `cn`              | `shared/utils/cn.ts`              | 合併 class 名稱與衝突的 Tailwind class      | [cn.md](./cn.md)                           |
+| 名稱                                       | 位置                               | 用途                                        | 文件                                       |
+| ------------------------------------------ | ---------------------------------- | ------------------------------------------- | ------------------------------------------ |
+| `http`                                     | `shared/http/http.ts`              | 唯一的 API 入口，回傳解開 envelope 後的資料 | [http-client.md](./http-client.md)         |
+| `useMediaQuery`                            | `shared/hooks/useMediaQuery.ts`    | 追蹤 CSS media query 是否符合               | [useMediaQuery.md](./useMediaQuery.md)     |
+| `date`                                     | `shared/utils/date.ts`             | 日期處理物件，唯一匯入 dayjs 的檔案         | [date.md](./date.md)                       |
+| `useNotification`                          | `shared/hooks/useNotification.ts`  | 通知，底層是 HeroUI 的 `toast`              | [useNotification.md](./useNotification.md) |
+| `ErrorState`                               | `shared/components/ErrorState.tsx` | 整頁的錯誤與找不到頁面畫面                  | [ErrorState.md](./ErrorState.md)           |
+| `renderWithProviders`、`installMatchMedia` | `test/`                            | 元件測試用的 provider 包裝與 `matchMedia`   | [test-helpers.md](./test-helpers.md)       |
+| `cn`                                       | `shared/utils/cn.ts`               | 合併 class 名稱與衝突的 Tailwind class      | [cn.md](./cn.md)                           |
 
 ## 使用原則
 
 - 打 API 一律走 `http`，不直接用 `fetch` 或 `axios`。
 - 使用者回饋一律走 `useNotification`，不直接呼叫 HeroUI 的 `toast`。
+- 失敗畫面一律走 `ErrorState`，不顯示錯誤的訊息或堆疊。
 - 日期一律走 `date`，不直接匯入 `dayjs`。
 - 共用元件只收 props 與 callback，不呼叫模組的 hook。
 - UI 元件直接用 HeroUI，樣式用 Tailwind class 與 HeroUI 的變數，說明見 [../styles.md](../styles.md)；組 class 用 `cn`。

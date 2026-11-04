@@ -35,15 +35,17 @@
 
 ```
 src/
-  app/            layout.tsx、page.tsx：薄路由
+  app/            layout.tsx、page.tsx、error.tsx、global-error.tsx、not-found.tsx：薄路由與錯誤頁
   modules/home/   首頁模組（components、tests、index.ts）
   shared/
+    components/   ErrorState：整頁的錯誤與找不到頁面畫面
     http/         HTTP 封裝、錯誤型別與測試
     hooks/        共用 hook（清單見 components/README.md）
     providers/    AppProviders、QueryProvider、UiProvider
+    seo/          site.ts（網站的唯一常數）與 pageMetadata
     styles/       theme.ts（全站樣式的唯一來源）與 global.css（見 styles.md）
     utils/        date.ts：日期處理物件，唯一匯入 dayjs 的檔案
-  test/setup.ts   Vitest 設定
+  test/           Vitest 設定、renderWithProviders、matchMedia 替身
 tests/e2e/        Playwright 規格
 ```
 
@@ -59,14 +61,15 @@ tests/e2e/        Playwright 規格
 
 ## 文件索引
 
-| 文件                                             | 內容                                |
-| ------------------------------------------------ | ----------------------------------- |
-| [styles.md](./styles.md)                         | 樣式與全域 CSS                      |
-| [components/README.md](./components/README.md)   | 共用元件與 hook 索引                |
-| [rules/architecture.md](./rules/architecture.md) | 結構、分層、Next.js 規則（英文）    |
-| [rules/data-layer.md](./rules/data-layer.md)     | HTTP 封裝、React Query 規則（英文） |
-| [rules/testing.md](./rules/testing.md)           | 測試與檢查規則（英文）              |
-| [rules/ui.md](./rules/ui.md)                     | UI 與通知規則（英文）               |
+| 文件                                                       | 內容                                |
+| ---------------------------------------------------------- | ----------------------------------- |
+| [styles.md](./styles.md)                                   | 樣式與全域 CSS                      |
+| [components/README.md](./components/README.md)             | 共用元件與 hook 索引                |
+| [components/pageMetadata.md](./components/pageMetadata.md) | 頁面的 metadata 工具                |
+| [rules/architecture.md](./rules/architecture.md)           | 結構、分層、Next.js 規則（英文）    |
+| [rules/data-layer.md](./rules/data-layer.md)               | HTTP 封裝、React Query 規則（英文） |
+| [rules/testing.md](./rules/testing.md)                     | 測試與檢查規則（英文）              |
+| [rules/ui.md](./rules/ui.md)                               | UI 與通知規則（英文）               |
 
 ## 文件語言
 

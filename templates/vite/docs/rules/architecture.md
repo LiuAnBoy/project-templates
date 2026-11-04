@@ -9,7 +9,7 @@ index.html
 vite.config.ts              Vite, dev proxy and Vitest settings
 src/
   main.tsx                  entry: global stylesheet, then App
-  app/                      App.tsx (providers and router) and router.tsx (the only router file)
+  app/                      App.tsx (error boundary, providers and router), router.tsx (the only router file), ErrorBoundary.tsx, RouteError.tsx
   modules/<feature>/        one folder per feature
     components/             UI only this feature uses
     hooks/                  query and mutation hooks
@@ -21,16 +21,16 @@ src/
     index.ts                the module's public surface
   shared/
     components/             reusable UI, indexed in docs/components/README.md
-    hooks/                  hooks with no feature knowledge (useMediaQuery)
+    hooks/                  hooks with no feature knowledge (useMediaQuery, useNotification)
     http/                   the axios wrapper, its error types and tests
     providers/              AppProviders, QueryProvider, UiProvider (the UI library slot)
     styles/                 theme.ts (the one source of site-wide style values) and the global stylesheet
     utils/                  pure helpers
-  test/setup.ts             Vitest setup
+  test/                     Vitest setup, renderWithProviders, matchMedia stub
 tests/e2e/                  Playwright specs
 ```
 
-A folder exists only when it holds a file; the tree above is the target shape, and a folder is created when its first file is. Today `modules/home/` holds `components/`, `tests/`, `routes.tsx` and `index.ts`, and `shared/` holds `http/`, `hooks/`, `providers/`, `styles/` and `utils/`.
+A folder exists only when it holds a file; the tree above is the target shape, and a folder is created when its first file is. Today `modules/home/` holds `components/`, `tests/`, `routes.tsx` and `index.ts`, and `shared/` holds `components/`, `http/`, `hooks/`, `providers/`, `styles/` and `utils/`.
 
 Why: a feature is deleted or moved as one folder, and a reader finds a thing by asking which feature owns it.
 
@@ -58,13 +58,19 @@ Why: a feature is deleted or moved as one folder, and a reader finds a thing by 
 
 ### Routing
 
-- `app/router.tsx` is the only router file. It spreads each module's `routes` array into `createBrowserRouter`, so adding a feature is one import and one spread, and the module owns its paths. React Router 8 is used in library mode: `createBrowserRouter` from `react-router`, `RouterProvider` from `react-router/dom`.
+- `app/router.tsx` is the only router file. It spreads each module's `routes` array into the exported `routes`, which `createBrowserRouter` turns into the app's router, so adding a feature is one import and one spread, and the module owns its paths. React Router 8 is used in library mode: `createBrowserRouter` from `react-router`, `RouterProvider` from `react-router/dom`.
 - Layouts and route guards are shared components under `shared/layouts/` once they exist; a guard reads session state and redirects, it calls no API.
 - Lazy-load heavy routes with `React.lazy` where the bundle warrants it.
 
+### Error and not-found pages
+
+- `router.tsx` exports `routes`: one root route whose `errorElement` is `RouteError`, with the modules' routes and a final `*` route rendering `ErrorState` with `kind="not-found"` as its children. Add a module's routes before the catch-all.
+- `RouteError` catches a route that throws while rendering or loading. React Router has no reset, so its retry reloads the page. `ErrorBoundary` wraps `AppProviders` and the router in `App.tsx` and catches what sits outside the routes; its retry renders the children again.
+- Both log the error with `console.error` and render `ErrorState`. Neither shows the error's message or stack.
+
 ### Providers
 
-`shared/providers/AppProviders.tsx` composes the global providers and `app/App.tsx` mounts it around the router. Add a provider to `AppProviders`, never beside it.
+`shared/providers/AppProviders.tsx` composes the global providers and `app/App.tsx` mounts it around the router, inside the `ErrorBoundary`. Add a provider to `AppProviders`, never beside it.
 
 ### The API proxy
 
