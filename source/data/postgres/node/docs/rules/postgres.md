@@ -42,9 +42,10 @@ Drizzle's migrator applies a migration only when its journal `when` is newer tha
 - SQL appears only in repositories. Controllers, routes and services never build a query. A query has one place to review and to change when the schema moves.
 - Drizzle builds the queries. Raw SQL through Drizzle's `sql` tag is fine in a repository when the builder cannot express the query.
 - The service owns the transaction scope. It opens the transaction with the runner from `createDatabase`, `transactions.run(tx => ...)` (the `TRANSACTION_RUNNER` token on Nest, `infra.transactions` on Fastify), passes the transaction handle explicitly to every repository call inside it, and commits or rolls back. Do not use AsyncLocalStorage or request-scoped repositories: a mistake there does not throw, it silently loses atomicity.
+- A `run` called from inside another `run` is refused at once, with an error that names the cause, and answers 500 because it is a bug. It would otherwise take a second connection and wait for a lock its own caller holds, or use up the pool when several requests nest together. Pass the handle down instead. The outer transaction rolls back when the refusal propagates and commits when its callback catches it, and the next `run` works as usual.
 - A repository method that writes takes the caller's handle as a required parameter. A write that silently falls back to the pool client commits outside the transaction its caller believes it is in.
 - A read may default to the pool when no transaction is open.
-- Counting or deleting under a lock is the one case where a repository may open its own transaction, when the transaction is the whole operation. Say so in its doc comment.
+- Counting or deleting under a lock is the one case where a repository may open its own transaction, when the transaction is the whole operation. Say so in its doc comment, and never call it from inside a `run`.
 - Queue and cache side effects run after the transaction commits, because they cannot join it.
 
 ```ts

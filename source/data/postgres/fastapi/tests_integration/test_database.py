@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import time
 from collections.abc import Awaitable, Callable
 from types import SimpleNamespace
 
@@ -74,6 +75,87 @@ def test_a_write_sees_its_own_transaction_and_is_hidden_from_outside_until_commi
         await database.transactions.run(work)
 
         assert await _read(database, probe, "inside")
+
+    _scenario(body)
+
+
+def test_a_nested_run_is_refused_at_once_and_the_runner_stays_usable() -> None:
+    async def body(database: DatabasePort, probe: Probe) -> None:
+        async def outer(session: object) -> None:
+            async def inner(_session: object) -> None:
+                return None
+
+            await database.transactions.run(inner)
+
+        with pytest.raises(RuntimeError, match="pass the session down"):
+            await database.transactions.run(outer)
+
+        await database.transactions.run(lambda session: probe.insert(session, "after-nested"))
+        assert await _read(database, probe, "after-nested")
+
+    _scenario(body)
+
+
+def test_a_nested_run_on_a_row_the_outer_wrote_is_refused_and_the_outer_rolls_back() -> None:
+    """Reproduces the self-deadlock: the inner insert would wait for the outer's own row."""
+
+    async def body(database: DatabasePort, probe: Probe) -> None:
+        async def outer(session: object) -> None:
+            await probe.insert(session, "self-deadlock")  # type: ignore[arg-type]
+            await database.transactions.run(
+                lambda inner: probe.insert(inner, "self-deadlock")  # type: ignore[arg-type]
+            )
+
+        with pytest.raises(RuntimeError, match="pass the session down"):
+            await asyncio.wait_for(database.transactions.run(outer), timeout=5)
+
+        assert not await _read(database, probe, "self-deadlock")
+
+    _scenario(body)
+
+
+def test_the_outer_transaction_commits_when_it_catches_the_refusal_of_a_nested_run() -> None:
+    async def body(database: DatabasePort, probe: Probe) -> None:
+        async def outer(session: object) -> None:
+            await probe.insert(session, "outer-survives")  # type: ignore[arg-type]
+
+            async def inner(_session: object) -> None:
+                return None
+
+            with pytest.raises(RuntimeError):
+                await database.transactions.run(inner)
+
+        await database.transactions.run(outer)
+
+        assert await _read(database, probe, "outer-survives")
+
+    _scenario(body)
+
+
+def test_twelve_concurrent_nested_calls_are_each_refused_and_the_pool_still_serves() -> None:
+    """Reproduces the exhausted pool: ten connections, twelve requests that each nest."""
+
+    async def body(database: DatabasePort, probe: Probe) -> None:
+        async def nested() -> BaseException | None:
+            async def outer(_session: object) -> None:
+                async def inner(_inner_session: object) -> None:
+                    return None
+
+                await database.transactions.run(inner)
+
+            try:
+                await database.transactions.run(outer)
+            except RuntimeError as error:
+                return error
+            return None
+
+        started = time.monotonic()
+        outcomes = await asyncio.gather(*(nested() for _ in range(12)))
+
+        assert time.monotonic() - started < 2
+        assert all("pass the session down" in str(outcome) for outcome in outcomes)
+        await database.transactions.run(lambda session: probe.insert(session, "after-twelve"))
+        assert await _read(database, probe, "after-twelve")
 
     _scenario(body)
 

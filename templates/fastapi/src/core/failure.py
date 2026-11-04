@@ -9,15 +9,18 @@ rendered here: the frames and the class of each link stay, and the message of a 
 that carries such text is replaced by a fixed note.
 """
 
+import ssl
 import traceback
 from collections import deque
 from collections.abc import Iterator
 
 from core.dependency import is_outage_link
 
-#: SQLSTATE classes whose server message quotes a value: 22 (data exception) and 23
-#: (integrity constraint violation, whose ``DETAIL`` names the key).
-_VALUE_QUOTING_CLASSES = ("22", "23")
+#: SQLSTATE classes and states whose server message quotes a value or a name: 22 (data
+#: exception) and 23 (integrity constraint violation, whose ``DETAIL`` names the key), 28
+#: (invalid authorization, which names the user) and 3D000 (an unknown database, which
+#: names it).
+_MESSAGE_QUOTING_STATES = ("22", "23", "28", "3D000")
 
 #: What replaces a message that is withheld.
 _WITHHELD = "<message withheld>"
@@ -50,11 +53,12 @@ def _withheld_texts(link: BaseException) -> list[str]:
     """Find the message texts of one link that must not be logged.
 
     A link that is a connection failure withholds its whole message, which names the
-    host, the user, the database or the path. A statement that a driver rejected for
-    the shape of a value withholds the driver's message, which SQLAlchemy repeats in
-    its own; SQLAlchemy's statement text stays, and so do the parameters only when the
-    engine was created with ``hide_parameters=True``, as every engine of the data
-    overlays is.
+    host, the user, the database or the path, and so does a TLS failure, which quotes
+    the name a certificate was checked against. A statement or a login that the server
+    rejected, in a class whose message quotes a value or a name, withholds the driver's
+    message, which SQLAlchemy repeats in its own; SQLAlchemy's statement text stays,
+    and so do the parameters only when the engine was created with
+    ``hide_parameters=True``, as every engine of the data overlays is.
 
     Args:
         link: One error in the chain.
@@ -63,13 +67,15 @@ def _withheld_texts(link: BaseException) -> list[str]:
         The texts to replace, possibly empty.
     """
     texts: list[str] = []
-    if is_outage_link(link):
+    if is_outage_link(link) or isinstance(link, ssl.SSLError):
         texts.append(str(link))
     original = getattr(link, "orig", None)
-    if isinstance(original, BaseException):
-        state = getattr(original, "sqlstate", None) or getattr(original, "pgcode", None)
-        if isinstance(state, str) and state.startswith(_VALUE_QUOTING_CLASSES):
-            texts.append(str(original))
+    for candidate in (link, original):
+        if not isinstance(candidate, BaseException):
+            continue
+        state = getattr(candidate, "sqlstate", None) or getattr(candidate, "pgcode", None)
+        if isinstance(state, str) and state.startswith(_MESSAGE_QUOTING_STATES):
+            texts.append(str(candidate))
     return [text for text in texts if text]
 
 
@@ -81,7 +87,8 @@ def format_failure(error: BaseException) -> str:
 
     Returns:
         The text ``traceback.format_exception`` gives, with the message of every
-        connection failure and of every value-quoting driver error replaced.
+        connection and TLS failure and of every driver error that quotes a value or a name
+        replaced.
     """
     text = "".join(traceback.format_exception(error))
     withheld = {item for link in walk_errors(error) for item in _withheld_texts(link)}

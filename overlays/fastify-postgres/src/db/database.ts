@@ -1,3 +1,5 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
+
 import { drizzle, type NodePgDatabase } from 'drizzle-orm/node-postgres';
 import pg from 'pg';
 import { z } from 'zod';
@@ -45,7 +47,10 @@ const DEFAULT_CONNECT_TIMEOUT_MS = 5000;
  * check of `src/infra/` is what proves the server is reachable. It does not read
  * the environment and assumes nothing about where the server is. A pooled
  * connection that fails while idle (the server restarted) is dropped by the pool,
- * so the error event is handled here and the process stays up.
+ * so the error event is handled here and the process stays up. A nested
+ * `transactions.run` is refused at once, because the inner call would take a second
+ * connection and wait for locks the outer one holds, or exhaust the pool when
+ * several requests nest at the same time: pass the transaction handle down instead.
  *
  * @param config - The validated settings.
  * @param options - Timeouts, for tests.
@@ -68,8 +73,16 @@ export function createDatabase(
     );
   });
   const db = drizzle({ client: pool, schema });
+  const insideRun = new AsyncLocalStorage<true>();
   const transactions: TransactionRunner<DatabaseTransaction> = {
-    run: (work) => db.transaction(work),
+    run: async (work) => {
+      if (insideRun.getStore()) {
+        throw new Error(
+          'postgres: transactions.run was called inside a transaction; pass the transaction handle down instead',
+        );
+      }
+      return db.transaction((tx) => insideRun.run(true, () => work(tx)));
+    },
   };
   let closed = false;
   return {

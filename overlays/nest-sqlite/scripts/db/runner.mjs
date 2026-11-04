@@ -158,6 +158,7 @@ const CONNECTION_CODES = new Set([
   'ENOTFOUND',
   'EAI_AGAIN',
   'ERR_INVALID_URL',
+  'ERR_SOCKET_BAD_PORT',
   'SQLITE_CANTOPEN',
   'SQLITE_BUSY',
   'SQLITE_LOCKED',
@@ -190,9 +191,11 @@ function flatten(error, depth = 0) {
  * path could not be used. Their messages carry the host, the user, the path or
  * the name of the database: a login refusal (class 28), a missing database
  * (class 3D) and a TLS failure (`ERR_TLS_*`, whose message can name the host)
- * are all of this kind.
+ * are all of this kind, and so is any other `FATAL` reply of the server, which
+ * ends the connection before a statement ran (an `options` parameter it does
+ * not know quotes the name the URL gave).
  *
- * @param {{code?: unknown, message?: unknown, syscall?: unknown}} link One error in the chain.
+ * @param {{code?: unknown, message?: unknown, syscall?: unknown, severity?: unknown}} link One error in the chain.
  * @returns {boolean} True when the link names a connection or file-system failure.
  */
 function isConnectionLink(link) {
@@ -205,6 +208,8 @@ function isConnectionLink(link) {
     code.startsWith('ERR_TLS_') ||
     code.startsWith('57P0') ||
     typeof link.syscall === 'string' ||
+    link.severity === 'FATAL' ||
+    link.severity === 'PANIC' ||
     (typeof link.message === 'string' && CONNECTION_MESSAGES.test(link.message))
   );
 }

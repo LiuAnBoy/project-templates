@@ -6,10 +6,11 @@ another SQL store replaces this file and the models' dialect-specific types.
 """
 
 from collections.abc import Awaitable, Callable
+from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import Protocol
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy import Connection, text
 from sqlalchemy.engine import URL, make_url
@@ -22,6 +23,9 @@ from sqlalchemy.ext.asyncio import (
 from sqlalchemy.pool import NullPool
 
 from db.types import DatabasePort, TransactionRunner
+
+#: True while a unit of work of ``transactions.run`` is running in this task.
+_INSIDE_RUN: ContextVar[bool] = ContextVar("postgres_inside_run", default=False)
 
 
 class DatabaseSettings(BaseSettings):
@@ -45,6 +49,31 @@ class DatabaseSettings(BaseSettings):
 
     # The alias names the variable in an error: `DATABASE_URL`, not `database_url`.
     database_url: str = Field(alias="DATABASE_URL", pattern=r"^postgres(ql)?://")
+
+    @field_validator("database_url")
+    @classmethod
+    def _check_url(cls, value: str) -> str:
+        """Refuse a URL that SQLAlchemy cannot turn into an engine.
+
+        A port that is not a number, an unparsable authority and a repeated ``port``
+        option fail when the engine is built, with a message that quotes the part that
+        was wrong. Building the engine here, which never connects, stops the boot at the
+        settings, where an error names the variable and never its value.
+
+        Args:
+            value: The raw setting.
+
+        Returns:
+            The setting, unchanged.
+
+        Raises:
+            ValueError: With a fixed message, whatever the engine raised.
+        """
+        try:
+            create_async_engine(engine_url(value))
+        except Exception:
+            raise ValueError("must be a valid postgresql:// URL") from None
+        return value
 
 
 class DatabaseConfig(Protocol):
@@ -100,6 +129,10 @@ class _Runner:
     async def run[T](self, work: Callable[[AsyncSession], Awaitable[T]]) -> T:
         """Run the work in a transaction.
 
+        A nested call is refused at once, because it would take a second connection
+        and wait for locks its own caller holds, or exhaust the pool when several
+        requests nest together.
+
         Args:
             work: The unit of work; it receives the session of the transaction.
 
@@ -107,12 +140,22 @@ class _Runner:
             What ``work`` returned, once the transaction has committed.
 
         Raises:
+            RuntimeError: When called from inside another ``run``.
             ConnectionError: When the database was closed.
         """
         if self._is_closed():
             raise ConnectionError("postgres: the database is closed")
-        async with self._sessions() as session, session.begin():
-            return await work(session)
+        if _INSIDE_RUN.get():
+            raise RuntimeError(
+                "postgres: transactions.run was called inside a transaction; "
+                "pass the session down instead"
+            )
+        token = _INSIDE_RUN.set(True)
+        try:
+            async with self._sessions() as session, session.begin():
+                return await work(session)
+        finally:
+            _INSIDE_RUN.reset(token)
 
 
 def create_database(config: DatabaseConfig, options: DatabaseOptions | None = None) -> DatabasePort:

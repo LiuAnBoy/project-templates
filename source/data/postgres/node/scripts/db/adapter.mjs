@@ -10,6 +10,9 @@ const MIGRATIONS_SCHEMA = 'drizzle';
 const MIGRATIONS_TABLE = '__drizzle_migrations';
 const QUALIFIED_TABLE = `${MIGRATIONS_SCHEMA}.${MIGRATIONS_TABLE}`;
 
+/** How long `close` waits for the pool before it gives up and lets the real error print. */
+const CLOSE_WAIT_MS = 2000;
+
 /**
  * Opens the database named by `DATABASE_URL`.
  *
@@ -50,7 +53,17 @@ export async function openStore() {
       });
     },
     async close() {
-      await pool.end();
+      // `pool.end()` never settles after a connection that could not even be
+      // attempted (a port that is not a number), which would end the process with no
+      // message at all; the failure that caused it must reach the caller instead.
+      let timer;
+      await Promise.race([
+        pool.end(),
+        new Promise((resolve) => {
+          timer = setTimeout(resolve, CLOSE_WAIT_MS);
+        }),
+      ]);
+      clearTimeout(timer);
     },
   };
 }

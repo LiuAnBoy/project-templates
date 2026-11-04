@@ -1,3 +1,4 @@
+import { Redis } from 'ioredis';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { isDependencyOutage } from '../../common/errors/dependency-failure.js';
@@ -103,6 +104,49 @@ describe('redis outage, with no service running', () => {
     expect(retryDelay(1)).toBe(500);
     expect(retryDelay(4)).toBe(2000);
     expect(retryDelay(50)).toBe(5000);
+  });
+});
+
+describe('redis connection errors described for the log', () => {
+  /**
+   * Collects the error ioredis emits for a URL it cannot reach.
+   *
+   * @param url - The Redis URL to fail against.
+   * @returns The failure as the log line would hold it.
+   */
+  async function describeEmittedError(url: string): Promise<string> {
+    const client = new Redis(url, {
+      retryStrategy: () => null,
+      lazyConnect: true,
+      enableOfflineQueue: false,
+    });
+    const emitted = new Promise<unknown>((resolve) =>
+      client.once('error', resolve),
+    );
+    client.connect().catch(() => undefined);
+    const error = await emitted;
+    client.disconnect();
+    return JSON.stringify(describeFailure(error));
+  }
+
+  it('reproduces a refused connection: the log names no host, port or password, and keeps ECONNREFUSED', async () => {
+    const logged = await describeEmittedError(
+      'redis://canary-user:canary-pw@127.0.0.1:1/0',
+    );
+
+    for (const canary of ['127.0.0.1', 'canary-user', 'canary-pw']) {
+      expect(logged).not.toContain(canary);
+    }
+    expect(logged).toContain('ECONNREFUSED');
+  });
+
+  it('reproduces a host that does not resolve: the log names no host and keeps ENOTFOUND', async () => {
+    const logged = await describeEmittedError(
+      'redis://canary-host.invalid:6379',
+    );
+
+    expect(logged).not.toContain('canary-host');
+    expect(logged).toMatch(/ENOTFOUND|EAI_AGAIN/);
   });
 });
 

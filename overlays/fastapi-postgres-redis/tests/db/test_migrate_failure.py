@@ -68,3 +68,33 @@ def test_the_ssl_error_class_of_the_standard_library_is_a_connection_failure() -
 
     assert "secret-host" not in text
     assert text.startswith("Cannot reach or open the database")
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "postgresql://canaryuser:canarypw@127.0.0.1:CANARYPORT/canarydb",
+        "postgresql://canaryuser:canarypw@127.0.0.1:1/canarydb?port=CANARYPORT",
+        "postgresql://canaryuser:canarypw@[canary-host/canarydb",
+        "postgresql://canaryuser:ca%ZZnarypw@127.0.0.1:1/canarydb",
+    ],
+)
+def test_a_url_the_engine_cannot_be_built_from_is_refused_at_the_settings_naming_the_variable(
+    url: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    text = _describe(url, monkeypatch)
+
+    assert "DATABASE_URL" in text
+    assert "canary" not in text.lower()
+    assert "CANARYPORT" not in text
+
+
+@pytest.mark.parametrize("option", ["CANARYKEY=1", "canaryopt=CANARYVAL&CANARYKEY=1"])
+def test_a_connection_option_the_driver_refuses_prints_fixed_text_with_no_address(
+    option: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    text = _describe(f"postgresql://canaryuser:canarypw@localhost:1/canarydb?{option}", monkeypatch)
+
+    assert text.startswith("Cannot reach or open the database")
+    for canary in ("canary", "CANARY", "localhost", "::1", "127.0.0.1", "hostaddr", "port"):
+        assert canary not in text.replace("Cannot reach or open the database", "")

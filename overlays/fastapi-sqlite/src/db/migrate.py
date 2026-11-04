@@ -295,6 +295,26 @@ def _code_of(link: BaseException) -> str | None:
     return errno.errorcode.get(number) if isinstance(number, int) else None
 
 
+def _is_client_side_driver_error(link: BaseException) -> bool:
+    """Tell whether an error is psycopg refusing something before the server was asked.
+
+    A connection option that libpq does not know (``?CANARYKEY=1``) raises a
+    ``ProgrammingError`` that lists the host, the port and the address it resolved, and
+    carries no SQLSTATE because no server answered. Every statement the server rejected
+    has one.
+
+    Args:
+        link: One error in the chain.
+
+    Returns:
+        True for an error of psycopg that has no SQLSTATE.
+    """
+    return getattr(link, "sqlstate", None) is None and any(
+        cls.__module__.split(".")[0] == "psycopg" and cls.__name__ == "Error"
+        for cls in type(link).__mro__
+    )
+
+
 def _is_connection_failure(link: BaseException) -> bool:
     """Tell whether an error says the database could not be reached, opened or used.
 
@@ -303,11 +323,16 @@ def _is_connection_failure(link: BaseException) -> bool:
 
     Returns:
         True for a connection failure, a login refusal, a missing database, a TLS
-        failure and a file-system error; their messages name the host, the user, the
-        database or the path.
+        failure, a file-system error and a connection option the driver refused; their
+        messages name the host, the user, the database or the path.
     """
     code = _code_of(link) or ""
-    return is_outage_link(link) or code.startswith(_CONNECTION_STATES) or isinstance(link, OSError)
+    return (
+        is_outage_link(link)
+        or code.startswith(_CONNECTION_STATES)
+        or isinstance(link, OSError)
+        or _is_client_side_driver_error(link)
+    )
 
 
 def describe_migrate_failure(error: BaseException) -> str:

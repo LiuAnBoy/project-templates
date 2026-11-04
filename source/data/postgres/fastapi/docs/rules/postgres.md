@@ -4,7 +4,7 @@ PostgreSQL is accessed through SQLAlchemy 2 on `psycopg`, with Alembic for migra
 
 ## Connection settings
 
-- The server reads `DATABASE_URL`, a plain `postgresql://` URL whose driver the factory sets, and nothing in code names a host or a credential. A missing value stops the boot, naming the variable.
+- The server reads `DATABASE_URL`, a plain `postgresql://` URL whose driver the factory sets, and nothing in code names a host or a credential. A missing value, or a URL the engine cannot be built from (a port that is not a number, an unparsable host), stops the boot naming the variable and never the value.
 - `POSTGRES_DATABASE` is the plain database name. Compose uses it to create the database, and on a shared cluster it must name a database that exists there, because a wrong value blocks registering the service.
 - `POSTGRES_USER`, `POSTGRES_PASSWORD` and `POSTGRES_PORT` serve compose; the server reads only the URL. A project moves to another server by changing `.env` alone.
 - `src/db/database.py` is the one file that names PostgreSQL. It exports `create_database(config)`, which returns the session factory, the transaction runner, a probe and a close, and the `src/infra/` seam calls it once. Never create a second engine.
@@ -42,15 +42,15 @@ Two revisions generated on separate branches both descend from the same parent, 
 - Use SQLAlchemy 2 style (`select(...)`, `AsyncSession`) with an async engine. The engine is created through the `src/infra/` seam, connects on first use and is disposed in the app lifespan, not at import.
 - Rows map to pydantic models in each module's `schemas.py` or `rows.py`; the repository returns those models, never ORM instances or raw rows.
 - Values always travel as bound parameters; never format values into a SQL string. Raw SQL through `text()` is fine in a repository when the query builder cannot express the query.
-- The engine hides bound parameters (`hide_parameters`), and the log withholds the message of a driver error that quotes a value (SQLSTATE class 22, such as an invalid UUID, and class 23, whose `DETAIL` names the key). The statement and the code stay, so the log says what failed and never with what.
+- The engine hides bound parameters (`hide_parameters`), and the log withholds the message of a driver error that quotes a value or a name (SQLSTATE class 22, such as an invalid UUID; class 23, whose `DETAIL` names the key; class 28 and `3D000`, which name the user and the database) and the message of every connection or TLS failure, which names the host. The statement, the class and the code stay, so the log says what failed and never with what.
 
 ## Repositories and transactions
 
 - SQL appears only in repositories. Routers and services never build a query. A query has one place to review and to change when the schema moves.
 - The service owns the transaction scope. It opens the transaction with the runner from `create_database`, `transactions.run(work)` (`infra.transactions`), passes the session explicitly to every repository call inside it, and the transaction commits when `work` returns and rolls back when it raises. The commit happens inside the service call, so a commit failure surfaces in the request and becomes a proper failure answer.
+- A `run` called from inside another `run` is refused at once with a `RuntimeError` that names the cause, and answers 500 because it is a bug. It would otherwise take a second connection and wait for a lock its own caller holds, or use up the pool when several requests nest together. Pass the session down instead. The outer transaction rolls back when the refusal propagates and commits when its work catches it, and the next `run` works as usual.
 - A repository method takes the session as its first argument after `self`; one that writes takes the caller's session as a required parameter and never opens a session itself.
 - A read-only service method may open a session of `session_factory` without a transaction.
-- Do not call `run` from inside the work of another `run`; pass the session down.
 - Queue and cache side effects run after `run` returns, because they cannot join the transaction.
 
 ```python

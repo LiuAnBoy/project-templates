@@ -48,6 +48,63 @@ describe('postgres outage, with no service running', () => {
   });
 });
 
+describe('postgres connection failures described for the log, with no service running', () => {
+  /**
+   * Finds a port nothing listens on.
+   *
+   * @returns A port that was just free.
+   */
+  async function closedPort(): Promise<number> {
+    const probe = createServer();
+    await new Promise<void>((resolve) => probe.listen(0, '127.0.0.1', resolve));
+    const { port } = probe.address() as AddressInfo;
+    await new Promise<void>((resolve) => probe.close(() => resolve()));
+    return port;
+  }
+
+  /**
+   * Describes the failure of a probe against a URL.
+   *
+   * @param url - The database URL to fail against.
+   * @returns The failure as the log line would hold it.
+   */
+  async function describeProbeAgainst(url: string): Promise<string> {
+    const database = createDatabase({ DATABASE_URL: url });
+    const error = await database.probe().catch((caught: unknown) => caught);
+    await database.close();
+    return JSON.stringify(describeFailure(error));
+  }
+
+  it('reproduces a refused connection: the log names no host, port, user or database, and keeps the class and the code', async () => {
+    const port = await closedPort();
+
+    const logged = await describeProbeAgainst(
+      `postgresql://canary-user:canary-pw@127.0.0.1:${port}/canary-db`,
+    );
+
+    for (const canary of [
+      '127.0.0.1',
+      String(port),
+      'canary-user',
+      'canary-pw',
+      'canary-db',
+    ]) {
+      expect(logged).not.toContain(canary);
+    }
+    expect(logged).toContain('ECONNREFUSED');
+    expect(logged).toContain('"name":"Error"');
+  });
+
+  it('reproduces a host that does not resolve: the log names no host and keeps ENOTFOUND', async () => {
+    const logged = await describeProbeAgainst(
+      'postgresql://canary-user:canary-pw@canary-host.invalid:5432/canary-db',
+    );
+
+    expect(logged).not.toContain('canary-host');
+    expect(logged).toMatch(/ENOTFOUND|EAI_AGAIN/);
+  });
+});
+
 describe('postgres failures described for the log, with no service running', () => {
   it('keeps no tail of a bound value that looks like a stack frame', async () => {
     const database = createDatabase({ DATABASE_URL: CLOSED_PORT_URL });

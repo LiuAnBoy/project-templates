@@ -115,6 +115,42 @@ describe('bounded', () => {
 });
 
 describe('describeFailure', () => {
+  it('withholds the message and the stack header of a connection-layer failure, keeping its class and code', () => {
+    const cases: [string, string][] = [
+      ['connect ECONNREFUSED 10.9.8.7:5432', 'ECONNREFUSED'],
+      ['getaddrinfo ENOTFOUND canary-host.internal', 'ENOTFOUND'],
+      ['password authentication failed for user "canary-user"', '28P01'],
+      ['database "canary-db" does not exist', '3D000'],
+      ['too many connections for role "canary-user"', '53300'],
+      [
+        "Hostname/IP does not match certificate's altnames: Host: canary-host. is not in the cert's altnames: DNS:canary-cert.internal",
+        'ERR_TLS_CERT_ALTNAME_INVALID',
+      ],
+      ['self-signed certificate', 'DEPTH_ZERO_SELF_SIGNED_CERT'],
+      ['unable to open database file', 'SQLITE_CANTOPEN'],
+    ];
+    for (const [message, code] of cases) {
+      const error = Object.assign(new Error(message), { code });
+
+      const link = describeFailure(new Error('query failed', { cause: error }))
+        .chain[1];
+
+      expect(link?.code).toBe(code);
+      expect(link?.name).toBe('Error');
+      expect(link?.message).toBe('');
+      expect(link?.stack).toContain('failure.test');
+      expect(JSON.stringify(link)).not.toMatch(/canary|10\.9\.8\.7|5432/);
+    }
+  });
+
+  it('keeps the fixed message of a client that lost its connection', () => {
+    const link = describeFailure(
+      new Error('Connection terminated unexpectedly'),
+    ).chain[0];
+
+    expect(link?.message).toBe('Connection terminated unexpectedly');
+  });
+
   it('describes a failed statement by its query and cause, never its bound values', () => {
     const failed = Object.assign(
       new Error('Failed query: select $1\nparams: SECRET-TOKEN-123'),

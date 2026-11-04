@@ -1,6 +1,8 @@
 import io
 import re
+import ssl
 
+import pytest
 from loguru import logger
 
 from core.failure import format_failure
@@ -63,6 +65,41 @@ def test_a_connection_failure_keeps_its_class_and_loses_its_message() -> None:
 
     assert "ConnectionRefusedError" in text
     assert "10.1.2.3" not in text
+
+
+def test_a_failed_tls_check_under_a_connection_error_loses_the_name_it_quotes() -> None:
+    # redis-py wraps the ssl error in its own ConnectionError, so the ssl error is a
+    # cause that is not itself an outage.
+    check = ssl.SSLCertVerificationError(
+        1,
+        "[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: Hostname mismatch, "
+        "certificate is not valid for 'canary-host.internal'. (_ssl.c:1010)",
+    )
+    try:
+        try:
+            raise check
+        except ssl.SSLCertVerificationError as cause:
+            raise ValueError("handshake failed") from cause
+    except ValueError as error:
+        text = format_failure(error)
+
+    assert "canary-host" not in text
+    assert "SSLCertVerificationError" in text
+
+
+@pytest.mark.parametrize(
+    ("sqlstate", "message"),
+    [
+        ("28P01", 'password authentication failed for user "canary-user"'),
+        ("3D000", 'database "canary-db" does not exist'),
+    ],
+)
+def test_a_refused_login_or_database_loses_the_name_it_quotes(sqlstate: str, message: str) -> None:
+    driver = _driver_error(sqlstate, message)
+
+    text = format_failure(_raise_wrapped(driver, f"(driver) {driver}"))
+
+    assert "canary-" not in text
 
 
 def test_a_context_that_is_not_a_cause_is_described_too() -> None:

@@ -11,8 +11,12 @@
  * or cannot be opened, or an error a Redis or PostgreSQL client raises while
  * it has no connection. Anything unrecognised is not an outage, so a new failure mode
  * arrives as a 500 that gets investigated.
+ *
+ * The same codes decide which messages the log withholds (`isConnectionLayerFailure`):
+ * the outages above, plus the failures that reach the server but are refused at the
+ * connection (a rejected login or database) and the TLS failures.
  */
-import { flattenCauses } from './failure.js';
+import { flattenCauses, read } from './cause-chain.js';
 
 /** Network-level failures: the far end was not reached or went away mid-conversation. */
 const ERRNOS: ReadonlySet<string> = new Set([
@@ -105,6 +109,33 @@ function isClientOffline(value: object): boolean {
   );
 }
 
+/** The codes of a failed TLS handshake or certificate check, from Node and from OpenSSL. */
+const TLS_CODE =
+  /^(ERR_TLS_|ERR_SSL_|ERR_OSSL_|CERT_|UNABLE_TO_|HOSTNAME_MISMATCH$|DEPTH_ZERO_SELF_SIGNED_CERT$|SELF_SIGNED_CERT_IN_CHAIN$)/;
+
+/**
+ * PostgreSQL states of a connection the server refused for who or what it asked
+ * for: `28` is invalid authorization, `3D000` an unknown database.
+ *
+ * @param state - A SQLSTATE.
+ * @returns Whether it names a refused login or database.
+ */
+function isRefusedConnectionSqlState(state: string): boolean {
+  return state.startsWith('28') || state === '3D000';
+}
+
+/**
+ * Reads the string `code` and `sqlState` of one link.
+ *
+ * @param value - One error in the chain.
+ * @returns The codes it carries.
+ */
+function codesOf(value: object): string[] {
+  return ['code', 'sqlState']
+    .map((key) => read(value, key))
+    .filter((code): code is string => typeof code === 'string');
+}
+
 /**
  * Decides whether one link of the chain is a connection failure.
  *
@@ -113,20 +144,40 @@ function isClientOffline(value: object): boolean {
  */
 function linkIsOutage(value: unknown): boolean {
   if (typeof value !== 'object' || value === null) return false;
-  for (const key of ['code', 'sqlState']) {
-    let code: unknown;
-    try {
-      code = (value as Record<string, unknown>)[key];
-    } catch {
-      continue;
-    }
-    if (
-      typeof code === 'string' &&
-      (ERRNOS.has(code) || isConnectionSqlState(code) || isSqliteOutage(code))
+  const found = codesOf(value).some(
+    (code) =>
+      ERRNOS.has(code) || isConnectionSqlState(code) || isSqliteOutage(code),
+  );
+  return found || isClientOffline(value);
+}
+
+/**
+ * Whether one link failed in the connection layer, which is where a message
+ * names the host, the port, the user or the database.
+ *
+ * Decided by code only: the fixed messages that `pg` and ioredis raise for a
+ * connection that ended carry nothing and stay readable.
+ *
+ * @param value - One error in the chain.
+ * @returns True for a network errno, a connection-class SQLSTATE, a refused login
+ *   or database, any `FATAL` reply of a PostgreSQL server (it ends the connection
+ *   before a statement ran), a SQLite open or lock failure and a TLS failure.
+ */
+export function isConnectionLayerFailure(value: unknown): boolean {
+  if (typeof value !== 'object' || value === null) return false;
+  const severity = read(value, 'severity');
+  return (
+    severity === 'FATAL' ||
+    severity === 'PANIC' ||
+    codesOf(value).some(
+      (code) =>
+        ERRNOS.has(code) ||
+        isConnectionSqlState(code) ||
+        isRefusedConnectionSqlState(code) ||
+        isSqliteOutage(code) ||
+        TLS_CODE.test(code),
     )
-      return true;
-  }
-  return isClientOffline(value);
+  );
 }
 
 /**

@@ -10,7 +10,7 @@ from typing import Protocol
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from redis.asyncio import Redis
+from redis.asyncio import BlockingConnectionPool, Redis
 from redis.asyncio.retry import Retry
 from redis.backoff import NoBackoff
 
@@ -56,10 +56,17 @@ class RedisClientOptions:
     Attributes:
         connect_timeout_seconds: How long a connection attempt may take.
         socket_timeout_seconds: How long a connected socket may stay silent.
+        max_connections: How many connections the pool opens at most.
+        pool_wait_seconds: How long a command waits for a free connection when all are in
+            use, before it fails as an unavailable store. It equals the bound the rate
+            limiter puts on a call, so a burst larger than the pool queues inside that
+            bound and a command that outwaits it is answered 503 like a silent server.
     """
 
     connect_timeout_seconds: float = 2.0
     socket_timeout_seconds: float = 2.0
+    max_connections: int = 100
+    pool_wait_seconds: float = 1.0
 
 
 @dataclass(frozen=True)
@@ -91,7 +98,10 @@ def create_redis_client(
     ``socket_timeout_seconds``. It does not read the environment and assumes nothing
     about where the server is. Its errors carry the host and port: they are logged
     through ``core.failure``, which withholds them, and never printed raw. After
-    ``close`` the probe fails with a ``ConnectionError``.
+    ``close`` the probe fails with a ``ConnectionError``. The pool blocks instead of
+    failing when every connection is in use: a burst larger than ``max_connections``
+    queues for up to ``pool_wait_seconds``, so a request is counted and answered 429
+    rather than refused only because of how many others arrived with it.
 
     Args:
         config: The validated settings.
@@ -101,12 +111,15 @@ def create_redis_client(
         The Redis port.
     """
     chosen = options or RedisClientOptions()
-    client = Redis.from_url(
+    pool = BlockingConnectionPool.from_url(
         config.redis_url,
+        max_connections=chosen.max_connections,
+        timeout=chosen.pool_wait_seconds,
         socket_connect_timeout=chosen.connect_timeout_seconds,
         socket_timeout=chosen.socket_timeout_seconds,
         retry=Retry(NoBackoff(), 0),
     )
+    client = Redis.from_pool(pool)
     closed = False
 
     async def probe() -> None:

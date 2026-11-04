@@ -39,3 +39,40 @@ describe('what db:migrate prints when it cannot connect', () => {
     }
   });
 });
+
+describe('what db:migrate prints when the server ends the connection', () => {
+  it('prints fixed text for a FATAL reply that quotes a name from the URL', () => {
+    const fatal = Object.assign(
+      new Error('unrecognized configuration parameter "canary_opt"'),
+      { severity: 'FATAL', code: '42704' },
+    );
+
+    const text = describeMigrateFailure(fatal);
+
+    expect(text).toContain('Cannot reach or open the database');
+    expect(text).not.toContain('canary');
+  });
+});
+
+describe('what db:migrate prints for a URL whose port cannot be used', () => {
+  afterEach(() => {
+    delete process.env.DATABASE_URL;
+  });
+
+  it('reproduces a port option that is not a number: fixed text, not silence, and no value', async () => {
+    process.env.DATABASE_URL =
+      'postgresql://secret-user:secret-pw@127.0.0.1:1/secret-db?port=CANARYPORT';
+
+    for (const run of [runMigrate, runStatus]) {
+      const error = await run(openStore, { out: { write: () => true } }).then(
+        () => undefined,
+        (caught: unknown) => caught,
+      );
+
+      const text = describeMigrateFailure(error);
+
+      expect(text).toMatch(/^Cannot reach or open the database/);
+      expect(text).not.toContain('CANARYPORT');
+    }
+  });
+});

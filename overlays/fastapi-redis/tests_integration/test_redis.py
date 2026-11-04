@@ -1,6 +1,8 @@
 import asyncio
+import collections
 import time
 from collections.abc import Awaitable, Callable
+from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
 
 import pytest
@@ -157,5 +159,53 @@ def test_a_frozen_redis_answers_the_503_failure_within_the_bound_and_recovers(
         assert (status, text) == (503, UNAVAILABLE)
         assert seconds < 1.6
         await redis.probe()
+
+    _scenario(body)
+
+
+def _burst(app: TestClient, size: int) -> tuple[collections.Counter[int], float]:
+    """Send ``size`` requests at once; return how many got each status, and how long it took."""
+    started = time.monotonic()
+    with ThreadPoolExecutor(max_workers=size) as threads:
+        statuses = list(threads.map(lambda _: app.get("/api/v1/hello").status_code, range(size)))
+    return collections.Counter(statuses), time.monotonic() - started
+
+
+def test_a_burst_larger_than_the_pool_queues_and_is_counted_so_the_excess_gets_429(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Reproduces 300 concurrent requests against a pool of 100 connections: no 503."""
+
+    async def body(where: Target, redis: RedisPort) -> None:
+        def run() -> collections.Counter[int]:
+            with _app_on(where, monkeypatch, 100) as app:
+                return _burst(app, 300)[0]
+
+        assert await asyncio.to_thread(run) == {200: 100, 429: 200}
+
+    _scenario(body)
+
+
+def test_a_burst_against_a_frozen_redis_answers_503_for_every_request_within_the_bound(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The queue for a connection is bounded: nothing waits longer than the limiter's second."""
+
+    async def body(where: Target, redis: RedisPort) -> None:
+        pauser = create_redis_client(SimpleNamespace(redis_url=where.url))
+        try:
+            await pauser.client.client_pause(2500)
+
+            def run() -> tuple[collections.Counter[int], float]:
+                with _app_on(where, monkeypatch, 100) as app:
+                    return _burst(app, 300)
+
+            counts, seconds = await asyncio.to_thread(run)
+            await asyncio.sleep(1.5)
+        finally:
+            await pauser.close()
+
+        assert counts == {503: 300}
+        assert seconds < 2.4
 
     _scenario(body)
