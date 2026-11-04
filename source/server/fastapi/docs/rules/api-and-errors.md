@@ -46,6 +46,15 @@ Rules:
 - No path, secret, SQL, stack trace or driver message ever reaches an answer. An unknown error is logged with its full cause chain and answered with the fixed 500 text.
 - A new failure is a new table entry plus a line in the API page's error list.
 
+## Names, ids, time and paging on the wire
+
+- Every wire key (query, body and `data`) is snake_case. Python code is snake_case already, so models carry the wire names directly and nothing is converted; never add a camelCase alias or a generic key rewriter.
+- Paths are plural kebab-case nouns: `/api/v1/order-items`.
+- Ids are UUIDs and travel as strings.
+- Instants travel as ISO 8601 strings with an offset (`2026-11-04T09:30:00Z`), never as Unix integers. The database side is in `postgres.md`.
+- `page_size` defaults to 20 and is clamped to 100; `page` defaults to 1.
+- Failure messages are fixed English text.
+
 ## Wiring
 
 - Success: routes return `success(data)` or `listing(items, page=..., page_size=..., total_count=...)` from `src/core/envelope.py`, and declare `response_model=Envelope[Model]` or `ListEnvelope[Model]` so the schema comes from the same pydantic models. `success(None)` answers `data: {}`. A raw-response route (the exceptions above) returns a plain `Response` and skips the helper.

@@ -4,7 +4,7 @@
 
 ## 技術棧
 
-NestJS 11（Fastify adapter）、TypeScript 6、zod 4（nestjs-zod）、nestjs-pino、Vitest、ESLint 10 與 Prettier、pnpm。沒有資料庫、認證、Redis、佇列、信件、檔案儲存、健康檢查路由，也沒有 OpenAPI 文件。
+NestJS 11（Fastify adapter）、TypeScript 6、zod 4（nestjs-zod）、nestjs-pino、dayjs（只在 `src/common/date.ts` 使用）、Vitest、ESLint 10 與 Prettier、pnpm。沒有資料庫、認證、Redis、佇列、信件、檔案儲存、健康檢查路由，也沒有 OpenAPI 文件。
 
 ## 請求如何流過
 
@@ -51,8 +51,9 @@ NestJS 11（Fastify adapter）、TypeScript 6、zod 4（nestjs-zod）、nestjs-p
 
 | 頁面                                                 | 內容                                |
 | ---------------------------------------------------- | ----------------------------------- |
-| [`api/README.md`](api/README.md)                     | 回應格式、端點索引、錯誤訊息        |
-| [`api/hello.md`](api/hello.md)                       | `GET /api/v1/hello`                 |
+| [`apis/README.md`](apis/README.md)                   | 路由索引、回應形狀、封套之外的路由  |
+| [`apis/conventions.md`](apis/conventions.md)         | API 設計準則（寫 API 前先讀）       |
+| [`apis/hello.md`](apis/hello.md)                     | `GET /api/v1/hello`                 |
 | [`database.md`](database.md)                         | 資料庫現況                          |
 | [`rules/architecture.md`](rules/architecture.md)     | 結構與慣例                          |
 | [`rules/api-and-errors.md`](rules/api-and-errors.md) | 回應格式、錯誤、認證                |

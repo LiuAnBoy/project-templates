@@ -46,6 +46,16 @@ Rules:
 - No path, secret, SQL, stack trace or driver message ever reaches an answer. An unknown error is logged with its full cause chain and answered with the fixed 500 text.
 - A new failure is a new table entry plus a line in the API page's error list.
 
+## Names, ids, time and paging on the wire
+
+- Every wire key (query, body and `data`) is snake_case. Code stays camelCase and maps each field explicitly at the boundary: a zod `.transform` on the way in, a mapper function written key by key on the way out. No generic key rewriter, because it also rewrites enum values, slugs and free-form JSON.
+- Paths are plural kebab-case nouns: `/api/v1/order-items`.
+- Ids are UUIDs and travel as strings.
+- Instants travel as ISO 8601 strings with an offset (`2026-11-04T09:30:00.000Z`), never as Unix integers. The database side is in `postgres.md`.
+- `page_size` defaults to 20 and is clamped to 100; `page` defaults to 1.
+- Failure messages are fixed English text.
+- Dates are formatted, parsed and compared through `date` in `src/common/date.ts`, the only file that imports dayjs.
+
 ## Wiring
 
 - `ResponseEnvelopeInterceptor` (global, `APP_INTERCEPTOR`) maps a handler's return value to `{ success: true, payload: { data } }`, returns `data: {}` for `undefined`, and passes a `StreamableFile` through untouched. `paginated(data, meta)` returns the list shape. Controllers return plain data. `@RawResponse()` leaves one handler or controller outside the envelope; use it only for the exceptions above.

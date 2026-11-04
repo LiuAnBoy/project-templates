@@ -60,13 +60,15 @@ export const REQUIRED_WEB = [
   'docs/components/README.md',
   'docs/components/http-client.md',
   'docs/components/useMediaQuery.md',
+  'docs/components/date.md',
   ...RULES_WEB,
   'src/app',
   'src/modules/home/index.ts',
   'src/shared/http/http.ts',
   'src/shared/http/errors.ts',
   'src/shared/hooks/useMediaQuery.ts',
-  'src/shared/providers',
+  'src/shared/utils/date.ts',
+  'src/shared/providers/UiProvider.tsx',
 ];
 /** Extra paths of a UI-library web template. */
 export const REQUIRED_WEB_UI = [
@@ -81,9 +83,11 @@ export const FORBIDDEN_WEB_PLAIN = [
 ];
 
 const SERVER_DOCS = [
+  'CLAUDE.md',
   'docs/README.md',
-  'docs/api/README.md',
-  'docs/api/hello.md',
+  'docs/apis/README.md',
+  'docs/apis/conventions.md',
+  'docs/apis/hello.md',
   'docs/database.md',
   ...RULES_SERVER,
   'docs/rules/templates/migrate.sh',
@@ -114,6 +118,7 @@ export const REQUIRED_SERVER = {
 export const REQUIRED_WORKSPACE = [
   'pnpm-workspace.yaml',
   'contract/package.json',
+  'CLAUDE.md',
   'docs/README.md',
   'docs/contract.md',
 ];

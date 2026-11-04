@@ -133,6 +133,25 @@ Tests run the service against a real database inside a connection that rolls bac
 
 ## Rows and types
 
-- Use `timestamptz` for instants, `numeric` for money, `uuid` or `bigint` identity keys, and `text` over `varchar(n)` unless a limit is a rule.
+### Names and keys
+
+- Tables and columns are snake_case (`page_count`), never camelCase. Python is snake_case already, so a row maps to its model without renaming.
+- Every table has `id`, `created_at` and `updated_at`. `id` is a `uuid` primary key defaulting to `gen_random_uuid()` and travels as a string on the wire; do not use serial or identity integers as public ids. `created_at` and `updated_at` are `timestamptz NOT NULL DEFAULT now()`, and every update sets `updated_at` (in the repository's update statement, or by a trigger).
+- There is no soft delete by default: a delete removes the row. A table that needs one adds a nullable `deleted_at timestamptz`, and its repository filters on it everywhere.
+
+```sql
+CREATE TABLE IF NOT EXISTS order_items (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  order_id uuid NOT NULL REFERENCES orders (id),
+  page_count integer NOT NULL CHECK (page_count > 0),
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+```
+
+### Types and constraints
+
+- Use `timestamptz` for every instant, never a Unix integer and never `timestamp` without a zone. The API carries instants as ISO 8601 strings (`api-and-errors.md`).
+- Use `numeric` for money, and `text` over `varchar(n)` unless a limit is a rule.
 - Constraints belong in the schema (`NOT NULL`, `UNIQUE`, `CHECK`, foreign keys), not only in the application. A unique violation maps to a 409 through the failure table in `api-and-errors.md`.
 - Index every foreign key and every column a list endpoint filters or sorts on.

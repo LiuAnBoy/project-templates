@@ -47,8 +47,9 @@ FastAPI、Python 3.12 以上、pydantic 2、pydantic-settings、loguru、pytest�
 
 | 頁面                                                 | 內容                                |
 | ---------------------------------------------------- | ----------------------------------- |
-| [`api/README.md`](api/README.md)                     | 回應格式、端點索引、錯誤訊息        |
-| [`api/hello.md`](api/hello.md)                       | `GET /api/v1/hello`                 |
+| [`apis/README.md`](apis/README.md)                   | 路由索引、回應形狀、封套之外的路由  |
+| [`apis/conventions.md`](apis/conventions.md)         | API 設計準則（寫 API 前先讀）       |
+| [`apis/hello.md`](apis/hello.md)                     | `GET /api/v1/hello`                 |
 | [`database.md`](database.md)                         | 資料庫現況                          |
 | [`rules/architecture.md`](rules/architecture.md)     | 結構與慣例                          |
 | [`rules/api-and-errors.md`](rules/api-and-errors.md) | 回應格式、錯誤、認證                |

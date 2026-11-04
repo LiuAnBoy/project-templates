@@ -185,9 +185,9 @@ test('an English record page fails', () => {
 
 test('a broken relative link fails, a link inside code does not', () => {
   const dir = make('fastify');
-  put(path.join(dir, 'docs/api/hello.md'), '# 你好\n\n[gone](./missing.md)\n');
-  failsWith(dir, /docs\/api\/hello\.md: broken link: \.\/missing\.md/);
-  put(path.join(dir, 'docs/api/hello.md'), '# 你好\n\n`[x](./missing.md)` 與 https://example.com 與 [a](#anchor)\n');
+  put(path.join(dir, 'docs/apis/hello.md'), '# 你好\n\n[gone](./missing.md)\n');
+  failsWith(dir, /docs\/apis\/hello\.md: broken link: \.\/missing\.md/);
+  put(path.join(dir, 'docs/apis/hello.md'), '# 你好\n\n`[x](./missing.md)` 與 https://example.com 與 [a](#anchor)\n');
   passes(dir);
 });
 

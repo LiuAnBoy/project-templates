@@ -11,3 +11,6 @@ dist/
 .env.*
 !.env.example
 .DS_Store
+
+# Local work notes
+todos/
