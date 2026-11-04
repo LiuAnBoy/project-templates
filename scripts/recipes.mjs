@@ -31,6 +31,10 @@
  * layers, so extracting it over a fresh base project leaves a complete one.
  */
 
+import fs from 'node:fs';
+import path from 'node:path';
+import { DOCKER_FRAGMENT_NAMES } from './docker-blocks.mjs';
+
 /** @type {readonly string[]} */
 export const WEB_FRAMEWORKS = ['next', 'vite'];
 
@@ -230,6 +234,60 @@ export const DATA_LIVE = buildDataLive({
   frameworks: DATA_FRAMEWORKS,
   stores: DATA_STORES,
 });
+
+/**
+ * Name the targets that `check-docker.sh` builds and runs: the templates and
+ * overlays named outright, then `<framework>-<store>` for each pair, with
+ * `-redis` for a server store, as `buildDataLive` does, but with no Redis-only
+ * entry.
+ *
+ * @param {{named?: readonly string[], frameworks: readonly string[], stores: readonly string[]}} options
+ *   `named` are the targets listed by hand; the rest are generated from the
+ *   frameworks and the database stores.
+ * @returns {string[]} Target names.
+ */
+export function buildDockerLive({ named = [], frameworks, stores }) {
+  const live = [...named];
+  for (const framework of frameworks) {
+    for (const store of stores) {
+      live.push(`${framework}-${store}${STORE_TRAITS[store]?.server ? '-redis' : ''}`);
+    }
+  }
+  return live;
+}
+
+/**
+ * List the layers that hold a Docker fragment.
+ *
+ * @param {string} root Repository root.
+ * @param {Iterable<string>} layers Layer paths relative to the root.
+ * @returns {string[]} The sorted layers with at least one Docker fragment file.
+ */
+export function dockerFragmentLayers(root, layers) {
+  return [...new Set(layers)]
+    .filter((layer) => DOCKER_FRAGMENT_NAMES.some((name) => fs.existsSync(path.join(root, layer, name))))
+    .sort();
+}
+
+/**
+ * List the Docker fragment layers that no live Docker target contains, so a
+ * layer that never builds into an image cannot ship unnoticed.
+ *
+ * @param {Record<string, string[]>} targets Every template and overlay, to the
+ *   layers its output is joined from.
+ * @param {readonly string[]} live Names of the live Docker targets.
+ * @param {readonly string[]} dockerLayers Layers holding a Docker fragment.
+ * @returns {string[]} Layers in no live target, sorted; also a live name that is
+ *   not a target, as `unknown live target: <name>`.
+ */
+export function uncoveredDockerLayers(targets, live, dockerLayers) {
+  const problems = live.filter((name) => !(name in targets)).map((name) => `unknown live target: ${name}`);
+  const covered = new Set(live.flatMap((name) => targets[name] ?? []));
+  return [...problems, ...[...dockerLayers].filter((layer) => !covered.has(layer)).sort()];
+}
+
+/** @type {string[]} The targets that run as images; none ships a Docker file yet. */
+export const DOCKER_LIVE = [];
 
 Object.assign(overlays, dataOverlays);
 

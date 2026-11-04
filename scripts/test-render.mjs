@@ -10,6 +10,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { fillDockerfile, joinDockerignore } from './docker-blocks.mjs';
+
 const RENDER = path.join(path.dirname(fileURLToPath(import.meta.url)), 'render.mjs');
 const base = fs.mkdtempSync(path.join(os.tmpdir(), 'test-render-'));
 let counter = 0;
@@ -692,6 +694,287 @@ test('every layer of every data overlay runs in a live overlay, or the rule fail
   assert.deepEqual(uncoveredLayers(entries, ['nest-zzz']).slice(0, 1), ['unknown live overlay: nest-zzz']);
   // The shipped recipes obey the rule.
   assert.deepEqual(uncoveredLayers(dataOverlays, DATA_LIVE), []);
+});
+
+const APP_MAIN = '# Whole project.\n# Start: docker compose up.\nnetworks:\n  edge:\n    driver: bridge\n';
+const APP_SERVICES =
+  'services:\n  server:\n    build:\n      context: .\n    environment:\n      HOST: 0.0.0.0\n  migrate:\n    build:\n      context: .\n    restart: \'no\'\n    environment:\n      MODE: migrate\n';
+const SERVER_FRAGMENT =
+  'services:\n  server:\n    environment:\n      DATABASE_URL: x\n    depends_on:\n      postgres:\n        condition: service_healthy\n      migrate:\n        condition: service_completed_successfully\n  migrate:\n    environment:\n      DATABASE_URL: x\n    depends_on:\n      postgres:\n        condition: service_healthy\n      migrate:\n        condition: service_completed_successfully\nvolumes:\n  app-data:\n';
+const DOCKERFILE =
+  'FROM node:24-slim AS build\n# docker-fragment: build\nRUN true\n\nFROM node:24-slim\n# docker-fragment: runtime\nCMD ["node"]\n';
+
+/**
+ * A fixture with Docker fragments in separate layers. `dk` is a template made
+ * of all of them; the overlays join subsets.
+ *
+ * @param {Record<string, string>} extra Extra files, which override the defaults.
+ * @returns {{root: string, recipes: string}} Fixture.
+ */
+function dockerFixture(extra = {}) {
+  return custom(
+    {
+      'source/base/keep.txt': 'base\n',
+      'source/m/compose.app.fragment.yml': APP_MAIN,
+      'source/pg/compose.fragment.yml': COMPOSE_PG,
+      'source/pg/compose.server.fragment.yml': SERVER_FRAGMENT,
+      'source/sv/compose.app.fragment.yml': APP_SERVICES,
+      'source/sv/Dockerfile': DOCKERFILE,
+      'source/sv/Dockerfile.build.fragment': 'RUN apt-get install -y libpq5\n',
+      'source/sv/.dockerignore': '**/.env\n**/node_modules\n**/todos\n',
+      'source/pg/dockerignore.fragment': '# local data\ndata\n**/.env\n',
+      'source/ui/keep.txt': 'ui\n',
+      ...extra,
+    },
+    `export const recipes = { dk: ['source/m', 'source/pg', 'source/sv'], ui: ['source/base'] };
+export const overlays = {
+  late: { base: 'ui', layers: ['source/pg', 'source/sv', 'source/m'] },
+  nomain: { base: 'ui', layers: ['source/pg', 'source/sv'] },
+  uilike: { base: 'dk', layers: ['source/ui'] },
+  servervol: { base: 'ui', layers: ['source/m', 'source/sv', 'source/vol'] },
+};\n`,
+  );
+}
+
+const JOINED = `# Whole project.
+# Start: docker compose up.
+
+name: \${COMPOSE_PROJECT_NAME:?set COMPOSE_PROJECT_NAME in .env}
+
+services:
+  postgres:
+    image: postgres:18-alpine
+    healthcheck:
+      test: ["CMD", "pg_isready"]
+    restart: unless-stopped
+  server:
+    build:
+      context: .
+    environment:
+      HOST: 0.0.0.0
+      DATABASE_URL: x
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+  migrate:
+    build:
+      context: .
+    restart: 'no'
+    environment:
+      MODE: migrate
+      DATABASE_URL: x
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  postgres-data:
+  app-data:
+
+networks:
+  edge:
+    driver: bridge
+`;
+
+test('docker-compose.yml is one services key with a store and app services, named by the join', () => {
+  const fx = dockerFixture();
+  const result = render(fx, ['--only', 'dk']);
+  assert.equal(result.code, 0, result.out);
+  const out = read(fx, 'templates/dk/docker-compose.yml');
+  assert.equal(out, JOINED);
+  assert.equal(out.match(/^services:/gm).length, 1);
+  // The dev file keeps the store services alone, and no fragment is copied.
+  const dev = read(fx, 'templates/dk/docker-compose.dev.yml');
+  assert.match(dev, /postgres:/);
+  assert.doesNotMatch(dev, /server:|name:/);
+  for (const name of ['compose.app.fragment.yml', 'compose.server.fragment.yml', 'Dockerfile.build.fragment', 'dockerignore.fragment']) {
+    assert.equal(fs.existsSync(path.join(fx.root, 'templates/dk', name)), false, name);
+  }
+});
+
+test('the main block heads docker-compose.yml from any layer; none or two fail', () => {
+  const fx = dockerFixture();
+  assert.equal(render(fx, ['--only', 'late']).code, 0);
+  assert.ok(read(fx, 'overlays/late/docker-compose.yml').startsWith('# Whole project.\n# Start: docker compose up.\n\nname:'));
+  const none = render(fx, ['--only', 'nomain']);
+  assert.notEqual(none.code, 0);
+  assert.match(none.out, /no main block/);
+  const two = dockerFixture({ 'source/pg/compose.app.fragment.yml': '# second\nnetworks:\n  other: {}\n' });
+  const result = render(two, ['--only', 'dk']);
+  assert.notEqual(result.code, 0);
+  assert.match(result.out, /two main blocks/);
+});
+
+test('compose.server.fragment.yml writes no dev file, and its volumes reach the file', () => {
+  const fx = dockerFixture({
+    'source/vol/compose.server.fragment.yml':
+      'services:\n  server:\n    volumes:\n      - app-data:/app/data\nvolumes:\n  app-data:\n',
+  });
+  const result = render(fx, ['--only', 'servervol']);
+  assert.equal(result.code, 0, result.out);
+  const out = read(fx, 'overlays/servervol/docker-compose.yml');
+  assert.match(out, /  server:\n    build:\n      context: \.\n    environment:\n      HOST: 0\.0\.0\.0\n    volumes:\n      - app-data:\/app\/data\n/);
+  assert.match(out, /\nvolumes:\n  app-data:\n/);
+  assert.equal(fs.existsSync(path.join(fx.root, 'overlays/servervol/docker-compose.dev.yml')), false);
+});
+
+test('compose.server.fragment.yml names only server and migrate, and only a service that exists', () => {
+  const other = dockerFixture({ 'source/pg/compose.server.fragment.yml': 'services:\n  web:\n    environment:\n      A: 1\n' });
+  assert.match(render(other, ['--only', 'dk']).out, /service "web" is not allowed/);
+  const key = dockerFixture({ 'source/pg/compose.server.fragment.yml': 'services:\n  server:\n    image: x\n' });
+  assert.match(render(key, ['--only', 'dk']).out, /"image" of server is not allowed/);
+  const lost = dockerFixture({ 'source/sv/compose.app.fragment.yml': 'services:\n  server:\n    environment:\n      A: 1\n' });
+  assert.match(render(lost, ['--only', 'dk']).out, /service "migrate" is not defined/);
+  const twice = dockerFixture({
+    'source/pg/compose.server.fragment.yml':
+      'services:\n  server:\n    environment:\n      HOST: 1\n',
+  });
+  assert.match(render(twice, ['--only', 'dk']).out, /environment of service "server" lists "HOST" twice/);
+});
+
+test('a store block may not set build, restart or container_name; an app block may not set container_name', () => {
+  for (const key of ['build: .', 'restart: always', 'container_name: x']) {
+    const fx = dockerFixture({ 'source/pg/compose.fragment.yml': `services:\n  postgres:\n    image: x\n    ${key}\n` });
+    const result = render(fx, ['--only', 'dk']);
+    assert.notEqual(result.code, 0, key);
+    assert.match(result.out, /a store block may not set/, key);
+    // The dev file is joined by the same code and refuses too.
+    assert.notEqual(render(fx, ['--only', 'dk']).code, 0);
+  }
+  const app = dockerFixture({ 'source/sv/compose.app.fragment.yml': 'services:\n  server:\n    container_name: x\n' });
+  const result = render(app, ['--only', 'dk']);
+  assert.notEqual(result.code, 0);
+  assert.match(result.out, /an app block may not set/);
+  // A top-level name: is written by the join alone.
+  const named = dockerFixture({ 'source/m/compose.app.fragment.yml': `name: mine\n${APP_MAIN}` });
+  assert.match(render(named, ['--only', 'dk']).out, /top-level key "name" is not allowed/);
+});
+
+test('restart is added where absent and kept where stated', () => {
+  const fx = dockerFixture();
+  render(fx, ['--only', 'dk']);
+  const out = read(fx, 'templates/dk/docker-compose.yml');
+  assert.equal(out.match(/restart: unless-stopped/g).length, 2);
+  assert.equal(out.match(/restart: 'no'/g).length, 1);
+});
+
+test('Dockerfile markers are filled, removed when empty, and never reach the output', () => {
+  const fx = dockerFixture();
+  assert.equal(render(fx, ['--only', 'dk']).code, 0);
+  assert.equal(
+    read(fx, 'templates/dk/Dockerfile'),
+    'FROM node:24-slim AS build\nRUN apt-get install -y libpq5\nRUN true\n\nFROM node:24-slim\nCMD ["node"]\n',
+  );
+  const text = fillDockerfile('A\n# docker-fragment: build\n\n# docker-fragment: runtime\nB\n', { build: 'X\nY' });
+  assert.equal(text, 'A\nX\nY\n\nB\n');
+  assert.throws(() => fillDockerfile('A\n', { runtime: 'X' }), /no "# docker-fragment: runtime" line/);
+  assert.throws(
+    () => fillDockerfile('# docker-fragment: build\n# docker-fragment: build\n', {}),
+    /appears 2 times/,
+  );
+  assert.throws(() => fillDockerfile('# docker-fragment: other\n', {}), /unknown marker/);
+  const lost = dockerFixture({ 'source/sv/Dockerfile': 'FROM node:24-slim\n' });
+  const result = render(lost, ['--only', 'dk']);
+  assert.notEqual(result.code, 0);
+  assert.match(result.out, /fragment exists but the file has no/);
+  const orphan = dockerFixture();
+  fs.rmSync(path.join(orphan.root, 'source/sv/Dockerfile'));
+  assert.match(render(orphan, ['--only', 'dk']).out, /no layer holds Dockerfile/);
+});
+
+test('.dockerignore takes the fragments appended, without repeating a pattern', () => {
+  const fx = dockerFixture();
+  assert.equal(render(fx, ['--only', 'dk']).code, 0);
+  assert.equal(read(fx, 'templates/dk/.dockerignore'), '**/.env\n**/node_modules\n**/todos\n# local data\ndata\n');
+  assert.equal(joinDockerignore('a\n', ['b\n\n\nc\na\n']), 'a\nb\n\nc\n');
+});
+
+test('an overlay writes a Docker file only when a layer of its own contributes', () => {
+  const fx = dockerFixture();
+  const both = render(fx, ['--only', 'dk,uilike']);
+  assert.equal(both.code, 0, both.out);
+  const dir = path.join(fx.root, 'overlays/uilike');
+  assert.equal(fs.existsSync(path.join(dir, 'keep.txt')), true);
+  for (const name of ['docker-compose.yml', 'docker-compose.dev.yml', 'Dockerfile', '.dockerignore']) {
+    assert.equal(fs.existsSync(path.join(dir, name)), false, name);
+  }
+  // An overlay that does contribute holds the whole file.
+  const fx2 = dockerFixture();
+  fs.appendFileSync(fx2.recipes, "overlays.store = { base: 'ui', layers: ['source/m', 'source/pg', 'source/sv'] };\n");
+  const stored = render(fx2, ['--only', 'store']);
+  assert.equal(stored.code, 0, stored.out);
+  assert.equal(read(fx2, 'overlays/store/docker-compose.yml'), JOINED);
+  assert.equal(read(fx2, 'overlays/store/.dockerignore'), '**/.env\n**/node_modules\n**/todos\n# local data\ndata\n');
+  // Store blocks alone make no project compose file.
+  const fx3 = composeFixture();
+  assert.equal(render(fx3, ['--only', 'both']).code, 0);
+  assert.equal(fs.existsSync(path.join(fx3.root, 'overlays/both/docker-compose.yml')), false);
+});
+
+test('render.mjs re-exports buildCompose from docker-blocks.mjs', async () => {
+  const render = await import(new URL('./render.mjs', import.meta.url).href);
+  const blocks = await import(new URL('./docker-blocks.mjs', import.meta.url).href);
+  assert.equal(render.buildCompose, blocks.buildCompose);
+  assert.equal(typeof blocks.buildAppCompose, 'function');
+});
+
+test('guard: a build argument other than API_HOST and PART fails, in a Dockerfile and in a compose file', async () => {
+  const { checkBuildArgs } = await import(new URL('./docker-blocks.mjs', import.meta.url).href);
+  assert.deepEqual(checkBuildArgs('ARG API_HOST\nARG PART=web\nARG\tapi_host\n'.replace(/ARG\tapi_host\n/, ''), 'D'), []);
+  assert.match(checkBuildArgs('ARG NPM_TOKEN\n', 'D')[0], /NPM_TOKEN is not allowed/);
+  assert.equal(checkBuildArgs('ARG API_HOST=x\nARG DB_PASSWORD=y\n', 'D').length, 1);
+  const list = 'services:\n  web:\n    build:\n      args:\n        - API_HOST=x\n        - TOKEN=y\n    restart: x\n';
+  assert.match(checkBuildArgs(list, 'C')[0], /TOKEN/);
+  const map = 'services:\n  web:\n    build:\n      args:\n        PART: web\n        SECRET: y\n';
+  assert.equal(checkBuildArgs(map, 'C').length, 1);
+  assert.match(checkBuildArgs('    args: { SECRET: y }\n', 'C')[0], /SECRET/);
+  assert.deepEqual(checkBuildArgs('    args:\n      PART: web\n    environment:\n      TOKEN: y\n', 'C'), []);
+});
+
+test('guard: a .dockerignore must hold **/.env, **/node_modules and **/todos', async () => {
+  const { checkDockerignore } = await import(new URL('./docker-blocks.mjs', import.meta.url).href);
+  assert.deepEqual(checkDockerignore('**/.env\n**/node_modules\n**/todos\n.git\n', 'I'), []);
+  assert.equal(checkDockerignore('.env\nnode_modules\ntodos\n', 'I').length, 3);
+  assert.match(checkDockerignore('**/node_modules\n**/todos\n', 'I')[0], /lacks \*\*\/\.env/);
+  assert.match(checkDockerignore('**/.env\n**/node_modules\n', 'I')[0], /lacks \*\*\/todos/);
+});
+
+test('guard: FROM node must match the major of .nvmrc, and exactly one services key', async () => {
+  const { checkNodeMajor, checkOneServices } = await import(new URL('./docker-blocks.mjs', import.meta.url).href);
+  assert.deepEqual(checkNodeMajor('FROM node:24-slim AS b\nFROM node:24-slim\nFROM python:3.15-slim\n', '24\n', 'D'), []);
+  assert.deepEqual(checkNodeMajor('FROM node:24-slim\n', 'v24.1.0\n', 'D'), []);
+  assert.match(checkNodeMajor('FROM node:22-alpine\n', '24\n', 'D')[0], /node:22 differs from .nvmrc major 24/);
+  assert.equal(checkNodeMajor('FROM node:24-slim\nFROM --platform=linux/amd64 node:22\n', '24', 'D').length, 1);
+  assert.deepEqual(checkOneServices('name: x\nservices:\n  a: {}\n', 'C'), []);
+  assert.equal(checkOneServices('services:\n  a: {}\nservices:\n  b: {}\n', 'C').length, 1);
+  assert.equal(checkOneServices('volumes:\n', 'C').length, 1);
+});
+
+test('guard: a server store ships compose.server.fragment.yml, and a Docker layer is in a live target', async () => {
+  const { serverStoresMissingFragment } = await import(new URL('./docker-blocks.mjs', import.meta.url).href);
+  const { buildDockerLive, dockerFragmentLayers, uncoveredDockerLayers, DOCKER_LIVE } = await loadRecipes();
+  const fx = dockerFixture({ 'source/data/redis/common/compose.server.fragment.yml': 'services: {}\n' });
+  const traits = { postgres: { server: true }, sqlite: { server: false }, redis: { server: true } };
+  put(path.join(fx.root, 'source/data/postgres/node/note.txt'), 'x\n');
+  assert.deepEqual(serverStoresMissingFragment(fx.root, traits), ['postgres']);
+  put(path.join(fx.root, 'source/data/postgres/common/compose.server.fragment.yml'), 'services: {}\n');
+  assert.deepEqual(serverStoresMissingFragment(fx.root, traits), []);
+
+  const layers = dockerFragmentLayers(fx.root, ['source/base', 'source/m', 'source/pg', 'source/sv', 'source/sv', 'source/ui']);
+  assert.deepEqual(layers, ['source/m', 'source/pg', 'source/sv']);
+  const targets = { dk: ['source/m', 'source/pg', 'source/sv'], part: ['source/m'], ui: ['source/base'] };
+  assert.deepEqual(uncoveredDockerLayers(targets, ['dk'], layers), []);
+  assert.deepEqual(uncoveredDockerLayers(targets, ['part'], layers), ['source/pg', 'source/sv']);
+  assert.deepEqual(uncoveredDockerLayers(targets, ['zzz'], []), ['unknown live target: zzz']);
+
+  assert.deepEqual(
+    buildDockerLive({ named: ['fastify', 'next-heroui'], frameworks: ['nest', 'fastapi'], stores: ['postgres', 'sqlite'] }),
+    ['fastify', 'next-heroui', 'nest-postgres-redis', 'nest-sqlite', 'fastapi-postgres-redis', 'fastapi-sqlite'],
+  );
+  assert.deepEqual(DOCKER_LIVE, []);
 });
 
 let failed = 0;

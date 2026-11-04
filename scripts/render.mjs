@@ -40,6 +40,20 @@
  *     one `volumes:` likewise. A different top-level key, or a service or volume
  *     named twice, fails the render. A plain concatenation would repeat a key and
  *     a real merge needs a YAML parser, so the join is by section.
+ *   - The Docker files are joined by `docker-blocks.mjs` from the `agentsLayers`,
+ *     because each file is whole, and an overlay writes one only when a layer of
+ *     its own contributes to it (so a UI overlay leaves its base's files standing).
+ *     compose.app.fragment.yml and compose.server.fragment.yml join with
+ *     compose.fragment.yml into docker-compose.yml, which exists only when some
+ *     layer holds an app block: the one app block with no `services` key is the
+ *     main block (header, `name:`), compose.server.fragment.yml adds lines under
+ *     `environment`, `depends_on` and `volumes` of `server` and `migrate`, and
+ *     every service gets `restart: unless-stopped` unless it states a restart.
+ *     Dockerfile.build.fragment and Dockerfile.runtime.fragment fill the lines
+ *     `# docker-fragment: build` and `# docker-fragment: runtime` of the
+ *     Dockerfile a base layer owns, and dockerignore.fragment is appended to
+ *     .dockerignore. None of these fragments is copied. The rules of each block
+ *     are in the header of docker-blocks.mjs.
  *   - An overlay (recipes `overlays` export: {base, layers}) copies only its own
  *     layers, but its package.json merges the fragments of its base template's
  *     layers and its own, and is named after the base so the project can extend
@@ -53,6 +67,22 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import {
+  COMPOSE_APP_FRAGMENT,
+  COMPOSE_FRAGMENT,
+  COMPOSE_SERVER_FRAGMENT,
+  DOCKERFILE_FRAGMENTS,
+  DOCKERIGNORE_FRAGMENT,
+  DOCKER_FRAGMENT_NAMES,
+  buildAppCompose,
+  buildCompose,
+  collectFragments,
+  fillDockerfile,
+  joinDockerignore,
+  readDockerfileFragments,
+} from './docker-blocks.mjs';
+
+export { buildCompose };
 
 const FRAGMENT = 'package.fragment.json';
 const AGENTS_FRAGMENT = 'AGENTS.fragment.md';
@@ -64,8 +94,8 @@ const TEXT_JOINS = [
   { fragment: 'docs-index.fragment.md', output: 'docs/README.md' },
   { fragment: 'Makefile.fragment', output: 'Makefile' },
 ];
-const COMPOSE_FRAGMENT = 'compose.fragment.yml';
 const COMPOSE_OUTPUT = 'docker-compose.dev.yml';
+const COMPOSE_APP_OUTPUT = 'docker-compose.yml';
 const PYPROJECT_PINS = 'pyproject.dependencies';
 const PNPM_ALLOW = 'pnpm-allow.fragment';
 const PRETTIER_FRAGMENT = 'prettierignore.fragment';
@@ -74,6 +104,7 @@ const FRAGMENT_NAMES = new Set([
   FRAGMENT,
   ...TEXT_JOINS.map((join) => join.fragment),
   COMPOSE_FRAGMENT,
+  ...DOCKER_FRAGMENT_NAMES,
   PYPROJECT_PINS,
   PNPM_ALLOW,
   PRETTIER_FRAGMENT,
@@ -179,16 +210,7 @@ export function buildPackageJson(name, layerDirs) {
  * @returns {string | null} The joined text, or null when no layer has a block.
  */
 export function joinFragments(layerDirs, fragment) {
-  const parts = [];
-  for (const dir of layerDirs) {
-    const file = path.join(dir, fragment);
-    if (!fs.existsSync(file)) continue;
-    const text = fs
-      .readFileSync(file, 'utf8')
-      .replace(/^(?:[ \t]*\r?\n)+/, '')
-      .replace(/\s+$/, '');
-    if (text !== '') parts.push(text);
-  }
+  const parts = collectFragments(layerDirs, fragment);
   return parts.length === 0 ? null : `${parts.join('\n\n')}\n`;
 }
 
@@ -365,92 +387,6 @@ export function appendIgnorePatterns(text, patterns) {
 }
 
 /**
- * Join the compose blocks of the layers into one compose file by section.
- *
- * @param {string[]} layerDirs Absolute layer directories in order.
- * @returns {string | null} The compose file, or null when no layer has a block.
- * @throws {Error} On a top-level key other than `services` and `volumes`, a
- *   key repeated inside a block, a line that is neither a key, a comment nor
- *   indented, a service or volume named twice, or blocks that define no service.
- */
-export function buildCompose(layerDirs) {
-  const sections = { services: [], volumes: [] };
-  const names = { services: new Set(), volumes: new Set() };
-  let header = [];
-  let seenFragment = false;
-  for (const dir of layerDirs) {
-    const file = path.join(dir, COMPOSE_FRAGMENT);
-    if (!fs.existsSync(file)) continue;
-    const isMain = !seenFragment;
-    seenFragment = true;
-    /** @type {string[] | null} */
-    let current = null;
-    let pending = [];
-    const keys = new Set();
-    for (const line of fs.readFileSync(file, 'utf8').split('\n')) {
-      const key = /^([A-Za-z_][A-Za-z0-9_-]*):(?:\s+(.*))?$/.exec(line);
-      if (key) {
-        if (key[1] !== 'services' && key[1] !== 'volumes') {
-          throw new Error(
-            `${file}: top-level key "${key[1]}" is not allowed in a compose block (only services and volumes)`,
-          );
-        }
-        const value = (key[2] ?? '').replace(/(^|\s)#.*$/, '').trim();
-        if (value !== '' && value !== '{}') {
-          throw new Error(`${file}: "${key[1]}:" must open an indented block, found "${value}"`);
-        }
-        if (keys.has(key[1])) throw new Error(`${file}: top-level key "${key[1]}" appears twice`);
-        keys.add(key[1]);
-        // The main block's comment before its first key is the file header; any
-        // other comment before a key stays with the section that follows it.
-        const body = [];
-        if (isMain && current === null) header = pending;
-        else body.push(...pending);
-        pending = [];
-        current = body;
-        sections[key[1]].push(body);
-        continue;
-      }
-      if (line.trim() === '' || line.startsWith('#') || /^\s/.test(line)) {
-        (current ?? pending).push(line);
-        continue;
-      }
-      throw new Error(`${file}: unexpected top-level line in a compose block: ${line}`);
-    }
-    if (isMain && current === null) header = pending;
-  }
-  if (!seenFragment) return null;
-  const render = (name) => {
-    const bodies = sections[name].map((body) => {
-      while (body.length > 0 && body[body.length - 1].trim() === '') body.pop();
-      while (body.length > 0 && body[0].trim() === '') body.shift();
-      return body;
-    });
-    const indent = bodies
-      .flat()
-      .map((line) => /^(\s+)[^\s#]/.exec(line))
-      .find((match) => match);
-    const keyIndent = indent ? indent[1].match(/^\s*/)[0] : '  ';
-    for (const body of bodies) {
-      const own = body
-        .map((line) => /^(\s+)([A-Za-z0-9_.-]+):/.exec(line))
-        .filter((match) => match && match[1] === keyIndent);
-      for (const match of own) {
-        if (names[name].has(match[2])) throw new Error(`compose: ${name.slice(0, -1)} "${match[2]}" is defined twice`);
-        names[name].add(match[2]);
-      }
-    }
-    const lines = bodies.flat();
-    return lines.length === 0 ? null : [`${name}:`, ...lines].join('\n');
-  };
-  const services = render('services');
-  if (services === null) throw new Error('compose fragments define no service');
-  const volumes = render('volumes');
-  const head = header.join('\n').replace(/^\s+|\s+$/g, '');
-  return `${[head === '' ? null : head, services, volumes].filter((part) => part !== null).join('\n\n')}\n`;
-}
-
-/**
  * Render one template or overlay into `outDir`, replacing its content but
  * keeping the root lockfiles that already exist there.
  *
@@ -464,7 +400,8 @@ export function buildCompose(layerDirs) {
  *   pins, allowlist names and ignore patterns are inserted (default `layers`);
  *   `agentsLayers` are the layers whose text fragments are joined: AGENTS.md,
  *   .env.example, docs/database.md, docs/README.md and Makefile (default `fragmentLayers`).
- *   The compose file is joined from `layers`.
+ *   The dev compose file is joined from `layers`; the Docker files are joined from
+ *   `agentsLayers` and written only when a layer of `layers` contributes to them.
  * @returns {void}
  * @throws {Error} When a layer directory does not exist.
  */
@@ -514,6 +451,35 @@ export function renderTemplate(root, name, layers, outDir, options = {}) {
     }
     const compose = buildCompose(layerDirs);
     if (compose !== null) emit(COMPOSE_OUTPUT, compose);
+    /**
+     * Check whether a layer the target copies holds any of the named files.
+     *
+     * @param {string[]} files File names.
+     * @returns {boolean} True when one exists in one of `layers`.
+     */
+    const contributes = (files) => layerDirs.some((dir) => files.some((f) => fs.existsSync(path.join(dir, f))));
+    if (contributes([COMPOSE_FRAGMENT, COMPOSE_APP_FRAGMENT, COMPOSE_SERVER_FRAGMENT])) {
+      const full = buildAppCompose(agentsDirs);
+      if (full !== null) emit(COMPOSE_APP_OUTPUT, full);
+    }
+    if (contributes(['Dockerfile', DOCKERFILE_FRAGMENTS.build, DOCKERFILE_FRAGMENTS.runtime])) {
+      const blocks = readDockerfileFragments(agentsDirs);
+      if (agentsDirs.some((dir) => fs.existsSync(path.join(dir, 'Dockerfile')))) {
+        const { text, file } = readFromLayers(agentsDirs, 'Dockerfile', `${name} has a Dockerfile`);
+        emit('Dockerfile', fillDockerfile(text, blocks, file));
+      } else if (blocks.build || blocks.runtime) {
+        throw new Error(`${name} has Dockerfile fragments, but no layer holds Dockerfile`);
+      }
+    }
+    if (contributes(['.dockerignore', DOCKERIGNORE_FRAGMENT])) {
+      const lines = collectFragments(agentsDirs, DOCKERIGNORE_FRAGMENT);
+      if (agentsDirs.some((dir) => fs.existsSync(path.join(dir, '.dockerignore')))) {
+        const { text } = readFromLayers(agentsDirs, '.dockerignore', `${name} has a .dockerignore`);
+        emit('.dockerignore', joinDockerignore(text, lines));
+      } else if (lines.length > 0) {
+        throw new Error(`${name} has ${DOCKERIGNORE_FRAGMENT}, but no layer holds .dockerignore`);
+      }
+    }
     const pins = fragmentEntries(fragmentDirs, PYPROJECT_PINS);
     if (pins.length > 0) {
       const { text, file } = readFromLayers(fragmentDirs, 'pyproject.toml', `${name} has ${PYPROJECT_PINS}`);
