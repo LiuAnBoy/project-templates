@@ -137,8 +137,112 @@ export async function runStatus(openStore, options = {}) {
   }
 }
 
+/** How far down a chain of causes to look. */
+const MAX_DEPTH = 6;
+
+/** Network errnos and the codes of an unreachable or unopenable database. */
+const CONNECTION_CODES = new Set([
+  'ECONNREFUSED',
+  'ECONNRESET',
+  'ETIMEDOUT',
+  'EPIPE',
+  'EHOSTUNREACH',
+  'ENETUNREACH',
+  'ENOTFOUND',
+  'EAI_AGAIN',
+  'ERR_INVALID_URL',
+  'SQLITE_CANTOPEN',
+  'SQLITE_BUSY',
+  'SQLITE_LOCKED',
+]);
+
+/** Fixed messages of `pg` for a connection that ended or timed out; they carry no code. */
+const CONNECTION_MESSAGES =
+  /^(Connection terminated|timeout exceeded when trying to connect|Client has encountered a connection error)/;
+
+/**
+ * Flattens an error and everything under it, following `cause` and the entries
+ * of an `AggregateError`.
+ *
+ * @param {unknown} error Whatever was thrown.
+ * @param {number} [depth] Internal.
+ * @returns {object[]} The error and its causes, outermost first; only objects.
+ */
+function flatten(error, depth = 0) {
+  if (typeof error !== 'object' || error === null || depth > MAX_DEPTH)
+    return [];
+  const under = [
+    error.cause,
+    ...(Array.isArray(error.errors) ? error.errors : []),
+  ];
+  return [error, ...under.flatMap((link) => flatten(link, depth + 1))];
+}
+
+/**
+ * Whether a link says the database could not be reached or opened, or that a
+ * path could not be used. Their messages carry the host, the user or the path.
+ *
+ * @param {{code?: unknown, message?: unknown, syscall?: unknown}} link One error in the chain.
+ * @returns {boolean} True when the link names a connection or file-system failure.
+ */
+function isConnectionLink(link) {
+  const code = typeof link.code === 'string' ? link.code : '';
+  return (
+    CONNECTION_CODES.has(code) ||
+    code.startsWith('08') ||
+    code.startsWith('28') ||
+    code.startsWith('57P0') ||
+    typeof link.syscall === 'string' ||
+    (typeof link.message === 'string' && CONNECTION_MESSAGES.test(link.message))
+  );
+}
+
+/**
+ * Turns a failure of a migration script into what is safe to print.
+ *
+ * A failure to reach the database prints fixed text and the code found on the
+ * chain, never the driver's message, which carries the host, the user or the
+ * path. Any other failure prints its statement, when it has one, and the
+ * message of every link under it, so the root cause is never lost, and an
+ * `AggregateError` with an empty message never prints an empty line. Bound
+ * values (`params`) are never printed.
+ *
+ * @param {unknown} error Whatever was thrown.
+ * @returns {string} One or more lines, never empty.
+ */
+export function describeMigrateFailure(error) {
+  const links = flatten(error);
+  if (links.length === 0) return `Migration failed: ${typeof error}`;
+  if (links.some(isConnectionLink)) {
+    const codes = [
+      ...new Set(
+        links
+          .map((link) => link.code)
+          .filter((code) => typeof code === 'string'),
+      ),
+    ];
+    return `Cannot reach or open the database${codes.length > 0 ? ` (${codes.join(', ')})` : ''}. Check DATABASE_URL and that the server is running.`;
+  }
+  const lines = [];
+  for (const link of links) {
+    const text =
+      typeof link.query === 'string' && Array.isArray(link.params)
+        ? `Failed query: ${link.query}`
+        : typeof link.message === 'string'
+          ? link.message.trim()
+          : '';
+    if (text !== '' && !lines.includes(text)) lines.push(text);
+  }
+  if (lines.length === 0)
+    return `Migration failed: ${links[0].constructor?.name ?? 'Error'}`;
+  return lines
+    .map((line, index) => (index === 0 ? line : `  caused by: ${line}`))
+    .join('\n');
+}
+
 /**
  * Runs a script's task and turns a failure into a message on stderr and exit code 1.
+ * The message comes from `describeMigrateFailure`, so it never holds a connection value.
  *
  * @param {Promise<void>} task The task.
  * @returns {Promise<void>} Resolves either way; the exit code carries the failure.
@@ -147,9 +251,7 @@ export async function exitOnError(task) {
   try {
     await task;
   } catch (error) {
-    process.stderr.write(
-      `${error instanceof Error ? error.message : String(error)}\n`,
-    );
+    process.stderr.write(`${describeMigrateFailure(error)}\n`);
     process.exitCode = 1;
   }
 }

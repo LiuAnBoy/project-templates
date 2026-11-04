@@ -42,7 +42,12 @@ export async function openStore({ forMigrate }) {
     : new BetterSqlite3(path, { readonly: true, fileMustExist: true });
   connection.pragma('busy_timeout = 5000');
   if (forMigrate) {
-    connection.pragma('foreign_keys = ON');
+    // Foreign keys stay off while migrating. Drizzle runs a migration inside a
+    // transaction, where the `PRAGMA foreign_keys=OFF` of a generated table
+    // rebuild is a no-op, so with enforcement on, `DROP TABLE` of a parent
+    // silently deletes the child rows that `ON DELETE CASCADE` points at.
+    // `foreign_key_check` after the migrator takes the place of the enforcement.
+    connection.pragma('foreign_keys = OFF');
     connection.pragma('journal_mode = WAL');
   }
   return {
@@ -61,6 +66,13 @@ export async function openStore({ forMigrate }) {
     },
     async migrate(folder) {
       migrate(drizzle({ client: connection }), { migrationsFolder: folder });
+      const violations = connection.pragma('foreign_key_check');
+      if (violations.length > 0) {
+        const tables = [...new Set(violations.map((row) => row.table))];
+        throw new Error(
+          `The migration left rows that break a foreign key (${violations.length} in ${tables.join(', ')}). It is already applied: fix the data or add a migration.`,
+        );
+      }
     },
     async close() {
       connection.close();

@@ -16,6 +16,16 @@ describe('requireLocalUrl', () => {
     expect(() => requireLocalUrl('X', { X: url })).not.toThrow(/secret-pw/);
   });
 
+  it('refuses a URL whose query overrides the host', () => {
+    for (const query of ['host=db.example.com', 'hostaddr=10.0.0.5']) {
+      const url = `postgresql://u:secret-pw@localhost:5432/app?${query}`;
+      expect(() => requireLocalUrl('X', { X: url })).toThrow(
+        /host or hostaddr/,
+      );
+      expect(() => requireLocalUrl('X', { X: url })).not.toThrow(/secret-pw/);
+    }
+  });
+
   it('fails when the variable is missing or is not a URL', () => {
     expect(() => requireLocalUrl('X', {})).toThrow(/X is required/);
     expect(() => requireLocalUrl('X', { X: 'not a url' })).toThrow(/not a URL/);

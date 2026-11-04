@@ -29,7 +29,7 @@ PostgreSQL is accessed through Drizzle. The Drizzle schema, written in TypeScrip
 ### Applying and tracking
 
 - Drizzle records what ran in `drizzle.__drizzle_migrations`; `drizzle/meta/_journal.json` lists the migrations that exist. Nothing keeps its own list by hand.
-- `pnpm db:migrate` is the only way a shared database changes. It applies only what is not recorded, does nothing when the database is up to date, and prints the counts, the names it applied and the record afterwards, so a deploy log shows which files ran instead of a silent success. It is a plain Node script, so a deploy image without dev dependencies can run it.
+- `pnpm db:migrate` is the only way a shared database changes. It applies only what is not recorded, does nothing when the database is up to date, and prints the counts, the names it applied and the record afterwards, so a deploy log shows which files ran instead of a silent success. It is a plain Node script, so a deploy image without dev dependencies can run it. A failure prints the statement and the cause; a failure to connect prints fixed text and a code, never the host or the user.
 - `pnpm db:status` lists the migrations that are still pending and never writes. A project with no table yet has none, and both commands say so.
 - Run `pnpm db:migrate` once per deploy, before the new code starts. Two runners against one database at once are not guarded.
 

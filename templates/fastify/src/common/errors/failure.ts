@@ -119,6 +119,17 @@ function nameOf(value: object): string {
 }
 
 /**
+ * Keeps only the call frames of a stack, dropping the message lines before them.
+ *
+ * @param stack - A stack string whose first lines are the error's message.
+ * @returns The frames, or an empty string when there are none.
+ */
+function framesOf(stack: string): string {
+  const start = stack.search(/\n\s+at /);
+  return start === -1 ? '' : stack.slice(start + 1);
+}
+
+/**
  * Describes one link of a chain.
  *
  * @param link - One error in the chain.
@@ -140,6 +151,14 @@ function describe({ error, sibling }: Flattened): FailureLink {
   if (code !== undefined) link.code = code;
   const stack = stringField(error, 'stack');
   if (stack !== undefined) link.stack = stack;
+  const query = stringField(error, 'query');
+  if (query !== undefined && Array.isArray(read(error, 'params'))) {
+    // A failed statement of a query builder: its message and stack carry the
+    // bound values, which can be tokens or personal data. The statement and the
+    // cause underneath say what went wrong.
+    link.message = `Failed query: ${query}`;
+    if (stack !== undefined) link.stack = framesOf(stack);
+  }
   if (sibling) link.sibling = true;
   return link;
 }

@@ -21,3 +21,4 @@ export function runStatus(
   options?: RunOptions,
 ): Promise<void>;
 export function exitOnError(task: Promise<void>): Promise<void>;
+export function describeMigrateFailure(error: unknown): string;

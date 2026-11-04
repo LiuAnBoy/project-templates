@@ -12,6 +12,7 @@ import {
   type JournalEntry,
 } from '../../../scripts/db/journal.mjs';
 import {
+  describeMigrateFailure,
   runMigrate,
   runStatus,
   type Store,
@@ -208,5 +209,50 @@ describe('the migration runner', () => {
 
     expect(chunks.join('')).toContain('No pending migrations.');
     expect(calls).toEqual(['close']);
+  });
+});
+
+describe('describeMigrateFailure', () => {
+  it('prints fixed text and the code for a connection failure, never the host or the user', () => {
+    const refused = Object.assign(
+      new Error('connect ECONNREFUSED 10.1.2.3:5432'),
+      {
+        code: 'ECONNREFUSED',
+      },
+    );
+    const aggregate = new AggregateError([refused], '');
+    const auth = Object.assign(
+      new Error('password authentication failed for user "secret-user"'),
+      { code: '28P01' },
+    );
+
+    for (const error of [aggregate, auth, new Error('q', { cause: refused })]) {
+      const text = describeMigrateFailure(error);
+      expect(text).toMatch(/Cannot reach or open the database/);
+      expect(text).not.toMatch(/10\.1\.2\.3|secret-user/);
+    }
+    expect(describeMigrateFailure(aggregate)).toContain('ECONNREFUSED');
+  });
+
+  it('prints the statement and every cause of a SQL failure, and never an empty line', () => {
+    const cause = Object.assign(new Error('relation "orders" already exists'), {
+      code: '42P07',
+    });
+    const failed = Object.assign(
+      new Error('Failed query: create table orders\nparams: SECRET'),
+      { query: 'create table orders', params: ['SECRET'], cause },
+    );
+
+    const text = describeMigrateFailure(failed);
+
+    expect(text).toBe(
+      'Failed query: create table orders\n  caused by: relation "orders" already exists',
+    );
+    expect(
+      describeMigrateFailure(new AggregateError([new Error('first')], '')),
+    ).toBe('first');
+    expect(describeMigrateFailure(new Error('DATABASE_URL is required'))).toBe(
+      'DATABASE_URL is required',
+    );
   });
 });

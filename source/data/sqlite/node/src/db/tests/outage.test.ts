@@ -5,7 +5,10 @@ import { join } from 'node:path';
 import BetterSqlite3 from 'better-sqlite3';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
+import { sql } from 'drizzle-orm';
+
 import { isDependencyOutage } from '../../common/errors/dependency-failure.js';
+import { describeFailure } from '../../common/errors/failure.js';
 import { createDatabase } from '../database.js';
 
 describe('sqlite outage', () => {
@@ -52,5 +55,23 @@ describe('sqlite outage', () => {
     await database.close();
 
     expect(isDependencyOutage(error)).toBe(true);
+  });
+
+  it('describes a failed statement without its bound values', async () => {
+    const file = join(folder, 'values.db');
+    new BetterSqlite3(file).close();
+    const database = createDatabase({ DATABASE_URL: file });
+
+    const error = await database.transactions
+      .run((tx) => {
+        tx.run(sql`insert into missing_table values (${'SECRET-TOKEN-123'})`);
+        return Promise.resolve();
+      })
+      .catch((caught: unknown) => caught);
+    await database.close();
+
+    const logged = JSON.stringify(describeFailure(error));
+    expect(logged).toContain('no such table');
+    expect(logged).not.toContain('SECRET-TOKEN-123');
   });
 });

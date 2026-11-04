@@ -30,8 +30,13 @@ export type DatabaseTransaction = Parameters<
 /** Anything a repository can run a statement against: the client or a transaction handle. */
 export type DatabaseExecutor = Database | DatabaseTransaction;
 
-/** How long a connection attempt may take, in milliseconds. */
-const CONNECT_TIMEOUT_MS = 5000;
+/** Settings that tests and unusual deployments may change. */
+export type DatabaseOptions = {
+  /** How long a connection attempt may take, in milliseconds. */
+  connectTimeoutMs?: number;
+};
+
+const DEFAULT_CONNECT_TIMEOUT_MS = 5000;
 
 /**
  * Creates the PostgreSQL client, its transaction runner, a probe and a close.
@@ -43,15 +48,18 @@ const CONNECT_TIMEOUT_MS = 5000;
  * so the error event is handled here and the process stays up.
  *
  * @param config - The validated settings.
+ * @param options - Timeouts, for tests.
  * @returns The database port.
  */
 export function createDatabase(
   config: DatabaseConfig,
+  options: DatabaseOptions = {},
 ): DatabasePort<Database, DatabaseTransaction> {
   const pool = new pg.Pool({
     connectionString: config.DATABASE_URL,
     max: 10,
-    connectionTimeoutMillis: CONNECT_TIMEOUT_MS,
+    connectionTimeoutMillis:
+      options.connectTimeoutMs ?? DEFAULT_CONNECT_TIMEOUT_MS,
     idleTimeoutMillis: 30_000,
   });
   pool.on('error', (error: Error & { code?: string }) => {

@@ -28,7 +28,8 @@ SQLite is accessed through Drizzle on `better-sqlite3`. The Drizzle schema, writ
 ### Applying and tracking
 
 - Drizzle records what ran in the table `__drizzle_migrations`; `drizzle/meta/_journal.json` lists the migrations that exist. Nothing keeps its own list by hand.
-- `pnpm db:migrate` is the only way the database changes, and the only thing that creates the file. It applies only what is not recorded, does nothing when the database is up to date, and prints the counts, the names it applied and the record afterwards. It is a plain Node script, so a deploy image without dev dependencies can run it.
+- `pnpm db:migrate` is the only way the database changes, and the only thing that creates the file. It applies only what is not recorded, does nothing when the database is up to date, and prints the counts, the names it applied and the record afterwards. It is a plain Node script, so a deploy image without dev dependencies can run it. A failure prints the statement and the cause; a failure to reach the file prints fixed text and a code, never a path.
+- `pnpm db:migrate` turns foreign keys off while it migrates and runs `foreign_key_check` afterwards, failing on any violation. Drizzle runs each migration inside a transaction, where the `PRAGMA foreign_keys=OFF` of a generated table rebuild has no effect; with enforcement on, dropping the rebuilt parent would silently delete the child rows that `ON DELETE CASCADE` points at. The check runs after the migration is applied, so a violation means fixing the data in a new migration.
 - `pnpm db:status` lists the migrations that are still pending and never writes. A missing file means nothing is applied, and a project with no table yet has nothing pending.
 - Run `pnpm db:migrate` once per deploy, before the new code starts, while the server is stopped or idle.
 

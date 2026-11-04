@@ -17,7 +17,8 @@ const LOCAL_HOSTS: ReadonlySet<string> = new Set([
  * @param name - The variable to read, e.g. `TEST_DATABASE_URL`.
  * @param env - The environment to read; defaults to `process.env`.
  * @returns The URL.
- * @throws Error when the variable is missing, is not a URL, or names a host that is not local.
+ * @throws Error when the variable is missing, is not a URL, names a host that is not local, or
+ *   overrides the host in its query.
  */
 export function requireLocalUrl(
   name: string,
@@ -29,13 +30,20 @@ export function requireLocalUrl(
       `${name} is required: copy .env.example to .env and start the services before running the integration tests`,
     );
   }
-  let host: string;
+  let url: URL;
   try {
-    host = new URL(value).hostname;
+    url = new URL(value);
   } catch {
     throw new Error(`${name} is not a URL`);
   }
-  if (!LOCAL_HOSTS.has(host)) {
+  // The driver takes the server from `?host=` or `?hostaddr=` ahead of the
+  // authority, so a URL naming localhost can still point somewhere else.
+  if (url.searchParams.has('host') || url.searchParams.has('hostaddr')) {
+    throw new Error(
+      `${name} sets host or hostaddr in its query; the integration tests only run against this machine`,
+    );
+  }
+  if (!LOCAL_HOSTS.has(url.hostname)) {
     throw new Error(
       `${name} names a host that is not local; the integration tests only run against this machine`,
     );

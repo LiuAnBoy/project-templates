@@ -8,8 +8,8 @@
  * The check is an allowlist of what only a broken connection produces,
  * wherever it hides in the cause chain: a network errno, a PostgreSQL SQLSTATE
  * of the connection classes, a SQLite code for a database that is busy, locked
- * or cannot be opened, or an error a Redis client raises while it has no
- * connection. Anything unrecognised is not an outage, so a new failure mode
+ * or cannot be opened, or an error a Redis or PostgreSQL client raises while
+ * it has no connection. Anything unrecognised is not an outage, so a new failure mode
  * arrives as a 500 that gets investigated.
  */
 import { flattenCauses } from './failure.js';
@@ -37,6 +37,17 @@ const SQLITE_OUTAGE_PREFIXES = [
 const REDIS_OFFLINE_MESSAGES: ReadonlySet<string> = new Set([
   'Connection is closed.',
   "Stream isn't writeable and enableOfflineQueue options is false",
+]);
+
+/**
+ * Messages `pg` raises for a connection that ended or never came up. They carry
+ * no code, errno or cause, so they are recognised by their fixed text.
+ */
+const PG_CONNECTION_MESSAGES: ReadonlySet<string> = new Set([
+  'Connection terminated unexpectedly',
+  'Connection terminated due to connection timeout',
+  'timeout exceeded when trying to connect',
+  'Client has encountered a connection error and is not queryable',
 ]);
 
 /** The class name ioredis gives the error of a command that outlived its retries. */
@@ -68,15 +79,16 @@ function isSqliteOutage(code: string): boolean {
 }
 
 /**
- * Whether an error is a Redis client failing a command because it has no connection.
+ * Whether an error is a client failing because it has no connection: ioredis
+ * with no connection, or `pg` whose connection ended or timed out.
  *
  * These errors carry no errno or code, so they are recognised by their fixed
  * message or class name.
  *
  * @param value - One error in the chain.
- * @returns True for the offline errors of ioredis.
+ * @returns True for the offline errors of ioredis and the connection errors of pg.
  */
-function isRedisOffline(value: object): boolean {
+function isClientOffline(value: object): boolean {
   let name: unknown;
   let message: unknown;
   try {
@@ -87,7 +99,9 @@ function isRedisOffline(value: object): boolean {
   }
   return (
     name === REDIS_RETRIES_EXHAUSTED ||
-    (typeof message === 'string' && REDIS_OFFLINE_MESSAGES.has(message))
+    (typeof message === 'string' &&
+      (REDIS_OFFLINE_MESSAGES.has(message) ||
+        PG_CONNECTION_MESSAGES.has(message)))
   );
 }
 
@@ -112,7 +126,7 @@ function linkIsOutage(value: unknown): boolean {
     )
       return true;
   }
-  return isRedisOffline(value);
+  return isClientOffline(value);
 }
 
 /**
