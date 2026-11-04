@@ -1,0 +1,21 @@
+# The workspace packages. Missing directories are ignored, so the file is valid
+# before web/ and server/ exist.
+packages:
+  - web
+  - server
+  - contract
+
+# One fastify copy keeps plugin types consistent with the NestJS adapter's own.
+overrides:
+  fastify: 5.12.8
+
+# Dependencies allowed to run install scripts: the union every template needs.
+# pnpm blocks all others, so a library added later that prints "Ignored build
+# scripts" must be added here.
+onlyBuiltDependencies:
+  - '@nestjs/core'
+  - '@swc/core'
+  - '@tailwindcss/oxide'
+  - esbuild
+  - sharp
+  - unrs-resolver

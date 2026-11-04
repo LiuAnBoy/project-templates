@@ -1,0 +1,27 @@
+# Docs to update with a change
+
+This file says which of the project's own pages a kind of backend change must update, in the same change and the same commit as the code. A doc updated later is a doc that drifts. The task-to-doc table in `AGENTS.md` names the real files; where it differs from the names below, `AGENTS.md` wins.
+
+## Map
+
+| Change                                                                              | Update                                                                                                                                 |
+| ----------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| New, removed or changed endpoint, request or response shape, status code, auth rule | `docs/api/README.md` (the endpoint index) and the endpoint's own page under `docs/api/` (routes, parameters, example envelope, errors) |
+| New or changed table, column, index, constraint, enum or migration                  | `docs/database.md` (schema, relationships, the migration list) and `db/init.sql` per `postgres.md`                                     |
+| New module, service boundary, queue, scheduled job, external dependency, cache      | `docs/README.md` (the module list and the request flow)                                                                                |
+| New or changed environment variable or config key                                   | `src/config/env.ts`, `.env.example` with a fake value, and the commands section of `docs/README.md`                                    |
+| New command, script or make target                                                  | the scripts of `package.json` and the commands section of `docs/README.md`                                                             |
+| New failure code or message                                                         | the failure table in code (`src/common/errors/failures.ts`), and the error list of the endpoint's page                                 |
+| A decision that future work must respect                                            | `AGENTS.md` if it is a standing rule, otherwise the page that owns the topic                                                           |
+
+## Rules
+
+- Open `docs/README.md` (the index of `docs/`) before writing: extend the page that owns the topic; add a new page only for a topic with none, and link it from the index.
+- Describe current behaviour as it is now. Do not leave "was", "previously" or "TODO" notes in a page; history belongs in the changelog or the commit.
+- Records state only what exists: the endpoint index lists the endpoints that ship, the database page lists the tables that exist (none yet), nothing planned.
+- An API example shows the real envelope from `api-and-errors.md`, with fake data.
+- Language: `AGENTS.md` and everything under `docs/rules/` are English. Every other page under `docs/` (index, API, database, and any business page such as a workflow or a backlog) is Traditional Chinese.
+- Business pages (workflow, backlog, product rules) are not shipped. A project that needs one adds it under `docs/`, in Traditional Chinese, and links it from `docs/README.md`.
+- Docs and the schema go together: when `db/` changes, the database page, `init.sql` and the migration agree, and after the project's first production deploy the check in `postgres.md` passes. Before that deploy `db/migrations/` is empty, `init.sql` is the only schema source, and the check is not run.
+- A change that alters nothing a reader of these pages relies on (an internal refactor, a test) updates no page; say so in the report rather than touching docs for form.
+- Never put a host, port, credential or token in a page; point to where the real value lives (the env file, the secret store).
