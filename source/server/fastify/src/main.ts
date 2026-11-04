@@ -28,6 +28,11 @@ async function main(): Promise<void> {
   // A new domain is one more line in `modules`.
   const app = await buildServer({
     logLevel: config.LOG_LEVEL,
+    trustProxy: config.TRUST_PROXY,
+    rateLimit: {
+      max: config.RATE_LIMIT_MAX,
+      windowSeconds: config.RATE_LIMIT_WINDOW_SECONDS,
+    },
     modules: [createHelloModule({ greeter: createStaticGreeter() })],
   });
 

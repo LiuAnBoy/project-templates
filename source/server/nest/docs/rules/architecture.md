@@ -8,7 +8,7 @@ These rules govern all new code in this project. It is a medium or large backend
 src/
   main.ts            # NestFactory + FastifyAdapter, only boots
   bootstrap.ts       # adapter, body parser, helmet, request id, global prefix (shared with tests)
-  app.module.ts      # imports modules; provides the global pipe, interceptor, filter
+  app.module.ts      # imports modules; provides the global pipe, interceptor, filter, throttler guard
   config/env.ts      # zod env schema
   common/
     errors/          # failures.ts (the table), app-error.ts, failure.ts, dependency-failure.ts
@@ -67,11 +67,11 @@ Shapes, the failure table and `AppError` are in `api-and-errors.md`. Controllers
 
 ## Auth, security, throttling
 
-This template ships no authentication (see `api-and-errors.md`, Auth). When it is added:
+The request limit is on by default: `ThrottlerGuard` is a global `APP_GUARD` in `app.module.ts`, and `TRUST_PROXY` is read through the env schema, which rejects blanket-trust values, before `main.ts` builds the adapter (`api-and-errors.md`, Rate limiting). This template ships no authentication (see `api-and-errors.md`, Auth). When it is added:
 
-- Global `APP_GUARD`s in order: JWT auth first (on by default, `@Public()` opts out), then an authorisation guard, then a throttler backed by Redis storage.
+- Global `APP_GUARD`s in order: the throttler that is already there, then JWT auth (on by default, `@Public()` opts out), then an authorisation guard. The throttler comes first so that a flood of failed sign-ins is counted.
 - Allow the one configured web origin in CORS; `@fastify/helmet` is already registered in `bootstrap.ts`.
-- Read `trustProxy` from env through a zod schema that rejects blanket-trust values, before the adapter is built.
+- With more than one instance, pass the Redis storage to `createThrottlerOptions`.
 
 ## Data access
 
@@ -86,7 +86,7 @@ This template ships no database. When one is added, follow `postgres.md`: reposi
 ## Tests
 
 - Unit tests `*.test.ts`, and database or Redis tests `*.integration.test.ts`, both under the owning folder's `tests/`. Vitest, run once with `pnpm test`.
-- Boot the real application with `test/create-app.ts`; it uses the same adapter and `configureApp` as `main.ts`, so a plugin registered there is under test. A test that needs a route which fails on purpose passes a test-only controller to `createTestApp`.
+- Boot the real application with `test/create-app.ts`; it uses the same adapter and `configureApp` as `main.ts`, so a plugin registered there is under test. A test that needs a route which fails on purpose passes a test-only controller to `createTestApp`. Its third argument is the environment for that one app (`{ RATE_LIMIT_MAX: '2' }`): `ConfigModule` validates `process.env` when `app.module.ts` is imported, so a test cannot change a setting through `process.env`.
 - Integration tests run against a real PostgreSQL, never a mock of the repository layer.
 - Guard a module's public contract (status and envelope of each route) and every risky path (permission checks, concurrency, transactions); one regression test per real bug.
 

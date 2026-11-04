@@ -11,7 +11,7 @@ import {
   configureApp,
   createHttpAdapter,
 } from './bootstrap.js';
-import type { Env } from './config/env.js';
+import { validateEnv, type Env } from './config/env.js';
 
 /**
  * Boots the HTTP process; it only wires, `bootstrap.ts` holds the setup.
@@ -23,9 +23,12 @@ import type { Env } from './config/env.js';
  * @returns Resolves once the server is listening.
  */
 async function bootstrap(): Promise<void> {
+  // The adapter is built before the config module exists, and it needs the
+  // proxy trust, so the environment is validated once here as well.
+  const { TRUST_PROXY } = validateEnv(process.env);
   const app = await NestFactory.create<NestFastifyApplication>(
     AppModule,
-    createHttpAdapter(),
+    createHttpAdapter(TRUST_PROXY),
     { ...applicationOptions(), bufferLogs: true, abortOnError: false },
   );
   app.useLogger(app.get(Logger));

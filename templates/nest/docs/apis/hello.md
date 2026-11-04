@@ -2,7 +2,7 @@
 
 # hello
 
-共用規則：[conventions.md](./conventions.md)。這是目前唯一的路由，公開，沒有認證。
+共用規則：[conventions.md](./conventions.md)。這條路由公開，沒有認證。
 
 | 方法  | 路徑            | 說明                 |
 | ----- | --------------- | -------------------- |
@@ -22,4 +22,4 @@
 { "success": true, "payload": { "data": { "message": "hello world!!" } } }
 ```
 
-可能的失敗：這條路由沒有自己的失敗。不存在的路徑回 404（`not found`），未預期的錯誤回 500（`internal error`），完整清單見 [conventions.md](./conventions.md#失敗表)。
+可能的失敗：這條路由沒有自己的失敗。同一個 client 超過速率限制回 429（`too many requests`，見 [conventions.md](./conventions.md#速率限制)），不存在的路徑回 404（`not found`），未預期的錯誤回 500（`internal error`），完整清單見 [conventions.md](./conventions.md#失敗表)。

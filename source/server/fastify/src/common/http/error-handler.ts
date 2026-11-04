@@ -3,6 +3,7 @@ import type {
   FastifyInstance,
   FastifyReply,
   FastifyRequest,
+  preHandlerAsyncHookHandler,
 } from 'fastify';
 import {
   hasZodFastifySchemaValidationErrors,
@@ -124,10 +125,17 @@ function handleError(
  * Registers the error handler and the not-found handler on the instance.
  *
  * @param instance - The root Fastify instance, so every scope inherits them.
+ * @param beforeNotFound - A `preHandler` to run before the not-found answer,
+ *   which is where a request to an unknown path is counted by the rate limit.
  */
-export function registerErrorHandling(instance: FastifyInstance): void {
+export function registerErrorHandling(
+  instance: FastifyInstance,
+  beforeNotFound?: preHandlerAsyncHookHandler,
+): void {
   instance.setErrorHandler(handleError);
-  instance.setNotFoundHandler((_request, reply) =>
-    send(reply, FAILURES.notFound.status, FAILURES.notFound.message),
+  instance.setNotFoundHandler(
+    beforeNotFound ? { preHandler: beforeNotFound } : {},
+    (_request, reply) =>
+      send(reply, FAILURES.notFound.status, FAILURES.notFound.message),
   );
 }

@@ -2,7 +2,7 @@
 
 # Run with reload for local development.
 dev:
-	uv run --frozen uvicorn main:app --app-dir src --reload --port 8000
+	uv run --frozen uvicorn main:app --app-dir src --reload --port 8000 --no-proxy-headers
 
 # Run the server the way a deployment does.
 start:

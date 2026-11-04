@@ -57,12 +57,13 @@ Shapes, the failure table and `AppError` are in `api-and-errors.md`.
 
 ## Auth and safety
 
-This template ships no authentication (see `api-and-errors.md`, Auth). When it is added:
+The request limit is on by default: `buildServer` registers `@fastify/rate-limit` through `registerRateLimit`, and `TRUST_PROXY` reaches Fastify's `trustProxy` through the config schema, which rejects blanket-trust values (`api-and-errors.md`, Rate limiting). `@fastify/helmet` is already registered. This template ships no authentication (see `api-and-errors.md`, Auth). When it is added:
 
 - Mount it once, above every route, as an `onRequest` hook on the root instance before any `app.register`. A route is public only when it carries `config: { public: true }`.
 - Verify webhook signatures over the raw body before parsing JSON; fail closed (503) when the verifier's dependency is down.
-- A health route is public, touches no dependency and answers the bare probe body; a public readiness route may check the database.
-- Rate limits, CORS and headers: `@fastify/rate-limit`, `@fastify/cors`, with the rules in `api-and-errors.md`; `@fastify/helmet` is already registered.
+- The health route (`src/health/routes.ts`) is public, touches no dependency, answers the bare probe body and has `config: { rateLimit: false }`; mark it public in the same change as the auth hook. A public readiness route may check the database and takes `rateLimit: false` too.
+- CORS: `@fastify/cors`, with the rule in `api-and-errors.md`.
+- With more than one instance, pass the Redis store to `buildServer`'s `rateLimit.store` in `main.ts`.
 
 ## Data access
 

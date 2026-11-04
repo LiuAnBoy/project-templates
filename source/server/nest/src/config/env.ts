@@ -1,5 +1,7 @@
 import { z } from 'zod';
 
+import { rateLimitEnv } from '../common/http/rate-limit-env.js';
+
 const envSchema = z.object({
   NODE_ENV: z
     .enum(['development', 'test', 'production'])
@@ -9,6 +11,7 @@ const envSchema = z.object({
   LOG_LEVEL: z
     .enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent'])
     .default('info'),
+  ...rateLimitEnv,
 });
 
 /** The typed process environment. */

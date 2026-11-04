@@ -7,7 +7,9 @@ import {
 import type { IncomingMessage } from 'node:http';
 
 import { registerRoutePattern } from './common/http/access-log.js';
+import { HEALTH_PATH } from './modules/health/controllers/health.controller.js';
 import { registerJsonBodyParser } from './common/http/json-body-parser.js';
+import type { TrustProxy } from './common/http/rate-limit-env.js';
 import {
   registerRequestId,
   resolveRequestId,
@@ -22,7 +24,7 @@ export const API_PREFIX = 'api/v1';
 /**
  * Builds the Fastify adapter the application runs on.
  *
- * Two settings carry contract rather than preference:
+ * Three settings carry contract rather than preference:
  *
  * - `bodyLimit` is the JSON size limit, enforced while the body is read.
  * - `requestIdHeader: false` hands the incoming header to `genReqId` instead of
@@ -36,10 +38,19 @@ export const API_PREFIX = 'api/v1';
  * testing module initialises the adapter at `app.init()` instead, so tests
  * create the adapter with this function too.
  *
+ * - `trustProxy` decides which forwarded address `request.ip` reports, and so
+ *   which client the rate limit counts. `false` counts the socket address; a
+ *   list of proxy addresses trusts the forwarded header on a connection from
+ *   one of them.
+ *
+ * @param trustProxy - The `TRUST_PROXY` setting, `false` when none is set.
  * @returns The adapter.
  */
-export function createHttpAdapter(): FastifyAdapter {
+export function createHttpAdapter(
+  trustProxy: TrustProxy = false,
+): FastifyAdapter {
   const adapter = new FastifyAdapter({
+    trustProxy,
     bodyLimit: JSON_BODY_LIMIT_BYTES,
     requestIdHeader: false,
     genReqId: (request: IncomingMessage) =>
@@ -77,7 +88,7 @@ export function applicationOptions(): NestApplicationOptions {
  */
 export async function configureApp(app: NestFastifyApplication): Promise<void> {
   const instance = app.getHttpAdapter().getInstance();
-  app.setGlobalPrefix(API_PREFIX);
+  app.setGlobalPrefix(API_PREFIX, { exclude: [HEALTH_PATH] });
   registerRequestId(instance);
   registerJsonBodyParser(instance);
   await app.register(helmet, { contentSecurityPolicy: false });

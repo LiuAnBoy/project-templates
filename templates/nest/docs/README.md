@@ -4,16 +4,17 @@
 
 ## 技術棧
 
-NestJS 11（Fastify adapter）、TypeScript 6、zod 4（nestjs-zod）、nestjs-pino、dayjs（只在 `src/common/date.ts` 使用）、Vitest、ESLint 10 與 Prettier、pnpm。沒有資料庫、認證、Redis、佇列、信件、檔案儲存、健康檢查路由，也沒有 OpenAPI 文件。
+NestJS 11（Fastify adapter）、TypeScript 6、zod 4（nestjs-zod）、nestjs-pino、dayjs（只在 `src/common/date.ts` 使用）、Vitest、ESLint 10 與 Prettier、pnpm。沒有資料庫、認證、Redis、佇列、信件、檔案儲存，也沒有 OpenAPI 文件。健康檢查只有一條不碰任何相依服務的 liveness 路由。
 
 ## 請求如何流過
 
 1. Fastify 接收請求：產生或沿用安全的 `x-request-id`，解析 JSON 本文（空本文視為 `{}`，格式錯誤回表中的 400），加上 helmet 標頭。
 2. pino 寫 access log：只記錄路由樣式（例如 `/api/v1/hello`），不記錄實際網址、標頭或本文。
-3. 全域 `ZodValidationPipe` 以 zod 驗證輸入。
-4. Controller 只處理 HTTP，呼叫 service，回傳純資料。
-5. 全域 `ResponseEnvelopeInterceptor` 把回傳值包成 envelope；沒有回傳值時 `data` 為 `{}`。
-6. 任何錯誤都由全域 `AllExceptionsFilter` 依失敗表回覆，客戶端看不到框架或內部的訊息。
+3. 全域 `ThrottlerGuard` 依來源位址計數，同一個 client 超過上限就回 429（失敗封套）；只計存在的路由。
+4. 全域 `ZodValidationPipe` 以 zod 驗證輸入。
+5. Controller 只處理 HTTP，呼叫 service，回傳純資料。
+6. 全域 `ResponseEnvelopeInterceptor` 把回傳值包成 envelope；沒有回傳值時 `data` 為 `{}`。
+7. 任何錯誤都由全域 `AllExceptionsFilter` 依失敗表回覆，客戶端看不到框架或內部的訊息。
 
 ## 指令
 
@@ -32,16 +33,20 @@ NestJS 11（Fastify adapter）、TypeScript 6、zod 4（nestjs-zod）、nestjs-p
 
 啟動時只讀一次並驗證，位置在 `src/config/env.ts`。沒有 `.env` 也能啟動；`.env.example` 只放假的範例值。
 
-| 變數        | 預設值        | 說明                                  |
-| ----------- | ------------- | ------------------------------------- |
-| `NODE_ENV`  | `development` | `development`、`test` 或 `production` |
-| `HOST`      | `0.0.0.0`     | 監聽的位址                            |
-| `PORT`      | `8000`        | 監聽的埠                              |
-| `LOG_LEVEL` | `info`        | 日誌等級                              |
+| 變數                        | 預設值        | 說明                                                                         |
+| --------------------------- | ------------- | ---------------------------------------------------------------------------- |
+| `NODE_ENV`                  | `development` | `development`、`test` 或 `production`                                        |
+| `HOST`                      | `0.0.0.0`     | 監聽的位址                                                                   |
+| `PORT`                      | `8000`        | 監聽的埠                                                                     |
+| `LOG_LEVEL`                 | `info`        | 日誌等級                                                                     |
+| `RATE_LIMIT_MAX`            | `300`         | 每個 client 在一個時間窗內的請求上限                                         |
+| `RATE_LIMIT_WINDOW_SECONDS` | `60`          | 速率限制的時間窗，單位為秒                                                   |
+| `TRUST_PROXY`               | 空            | 前面有反向代理時，填代理的位址或網段（逗號分隔）；空表示以連線的來源位址計算 |
 
 ## 目前的模組
 
-`hello`（`src/modules/hello/`）：`GET /api/v1/hello`，controller、service、DTO 各一個檔案。
+- `hello`（`src/modules/hello/`）：`GET /api/v1/hello`，controller、service、DTO 各一個檔案。
+- `health`（`src/modules/health/`）：`GET /api/health`，只有一個 controller；在 `/api/v1` 之外，回封套之外的 `{"status":"ok"}`，不受速率限制。
 
 ## 擴充方式
 

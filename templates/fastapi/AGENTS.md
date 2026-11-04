@@ -5,6 +5,7 @@
 - Database naming (`docs/rules/postgres.md`): tables and columns are snake_case, never camelCase; instants are `timestamptz`, never Unix integers; ids are `uuid` defaulting to `gen_random_uuid()`; every table has `id`, `created_at` and `updated_at`; no soft delete by default, a table that needs it adds `deleted_at`.
 - SQL lives only in repositories; the service owns the transaction scope. PostgreSQL by default (`docs/rules/postgres.md`).
 - Dependency calls on the request path are wrapped in `bounded()`; an unreachable dependency answers 503, not 500.
+- Rate limiting is on by default: 300 requests per client per 60 seconds (`RATE_LIMIT_MAX`, `RATE_LIMIT_WINDOW_SECONDS`), answered 429 from the failure table. The client is the socket address; a forwarded header counts only from the proxies listed in `TRUST_PROXY`, and nothing else reads that header to decide (`docs/rules/api-and-errors.md`, Rate limiting).
 - An API or schema change updates the docs in the same change (`docs/rules/docs-to-update.md`).
 
 ## Task to doc
@@ -34,7 +35,7 @@
 
 Stack: FastAPI on Python 3.12 or later, pydantic 2 and pydantic-settings, loguru, pytest, ruff, uv. No database yet; when one is needed: PostgreSQL through SQLAlchemy 2 with Alembic migrations generated from the models (`docs/rules/postgres.md`).
 
-This is a starter with one public route, `GET /api/v1/hello`, built on the shared handlers (envelope, failure table, exception handlers, request id, access log). Add modules on top of them; do not rewrite them.
+This is a starter with two public routes, `GET /api/v1/hello` and the liveness probe `GET /api/health` (outside `/api/v1` and the envelope), built on the shared handlers (envelope, failure table, exception handlers, request id, access log). Add modules on top of them; do not rewrite them.
 
 ## FastAPI rules
 

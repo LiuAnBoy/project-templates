@@ -13,6 +13,7 @@ src/
     envelope.py            # success, listing, failure and the response models
     handlers.py            # exception handlers
     middleware.py          # request id and access log
+    rate_limit.py          # per-client request limit (the limits package behind a middleware)
     logging.py             # loguru setup
     paging.py              # page_params and MAX_PAGE_SIZE
     dependency.py          # is_dependency_outage
@@ -64,7 +65,7 @@ This template ships no database. When one is added, follow `postgres.md`: the se
 ## Tests
 
 - Tests sit in top-level `tests/<module>/test_*.py`, mirroring `src/`, and run once with `make test`.
-- `tests/conftest.py` builds a fresh application with `create_app()` and a `TestClient(raise_server_exceptions=False)`, so an unexpected error is answered like a server answers it instead of re-raised. A test that needs a route which fails on purpose adds a test-only router to that application.
+- `tests/conftest.py` builds a fresh application with `create_app()` and a `TestClient(raise_server_exceptions=False)`, so an unexpected error is answered like a server answers it instead of re-raised. A test that needs a route which fails on purpose adds a test-only router to that application. A test that needs another setting passes its own, `create_app(Settings(_env_file=None, rate_limit_max=2))`.
 - Test the service against a real database; stub only external services.
 - Guard the contract of each route (status and envelope) and every risky path; one regression test per real bug.
 

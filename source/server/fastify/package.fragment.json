@@ -4,6 +4,7 @@
     "start": "node --env-file-if-exists=.env dist/main.js"
   },
   "dependencies": {
+    "@fastify/rate-limit": "11.2.2",
     "fastify-type-provider-zod": "7.0.0"
   },
   "devDependencies": {

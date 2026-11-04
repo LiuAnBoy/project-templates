@@ -20,6 +20,7 @@
 # A server is copied without any .env, started with an empty environment on
 # port 8000 (LIVE_PORT overrides, also exported as PORT), and asserted over HTTP:
 #   GET /api/v1/hello       200 and exactly the hello body
+#   GET /api/health         200 and exactly {"status":"ok"} (outside the envelope)
 #   GET an unknown route    404, "success": false, string payload.message
 # The check refuses to run when the port is already taken. Everything started
 # is killed on exit. Only package installation touches the network.
@@ -143,7 +144,7 @@ wait_ready() {
   return 1
 }
 
-# assert_http: assert the hello body and the 404 failure envelope.
+# assert_http: assert the hello body, the bare health body and the 404 failure envelope.
 assert_http() {
   code="$(curl -s -o "$TMP/.live-body" -w '%{http_code}' --max-time 5 "http://localhost:$PORT/api/v1/hello")"
   body="$(cat "$TMP/.live-body")"
@@ -153,6 +154,14 @@ assert_http() {
     return 1
   fi
   echo "ok   GET /api/v1/hello"
+  code="$(curl -s -o "$TMP/.live-body" -w '%{http_code}' --max-time 5 "http://localhost:$PORT/api/health")"
+  body="$(cat "$TMP/.live-body")"
+  if [ "$code" != 200 ] || [ "$body" != '{"status":"ok"}' ]; then
+    echo "FAIL health: status $code, body: $body" >&2
+    echo 'expected 200 and:   {"status":"ok"}' >&2
+    return 1
+  fi
+  echo "ok   GET /api/health"
   code="$(curl -s -o "$TMP/.live-body" -w '%{http_code}' --max-time 5 "http://localhost:$PORT/api/v1/__live_check_no_such_route__")"
   if [ "$code" != 404 ]; then
     echo "FAIL unknown route: expected 404, got $code, body: $(cat "$TMP/.live-body")" >&2

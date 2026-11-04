@@ -4,15 +4,16 @@
 
 ## 技術棧
 
-FastAPI、Python 3.12 以上、pydantic 2、pydantic-settings、loguru、pytest、ruff、uv。沒有資料庫、認證、Redis、佇列、信件、檔案儲存、健康檢查路由，也沒有 OpenAPI 文件。
+FastAPI、Python 3.12 以上、pydantic 2、pydantic-settings、loguru、pytest、ruff、uv。沒有資料庫、認證、Redis、佇列、信件、檔案儲存，也沒有 OpenAPI 文件。健康檢查只有一條不碰任何相依服務的 liveness 路由。
 
 ## 請求如何流過
 
 1. `RequestContextMiddleware` 產生或沿用安全的 `x-request-id`，並在回應結束時寫 access log：只記錄路由樣式（例如 `/api/v1/hello`），不記錄實際網址、標頭或本文。
-2. FastAPI 以 pydantic 驗證輸入。
-3. Router 只解析輸入、呼叫 service、回傳 `success(...)`；`response_model=Envelope[...]` 宣告回應格式。
-4. 任何錯誤都由 `core/handlers.py` 的 exception handler 依失敗表回覆；不存在的路由與不允許的方法也是。客戶端看不到框架或內部的訊息。
-5. 互動式文件與 OpenAPI 文件已關閉。
+2. `RateLimitMiddleware` 依來源位址計數，同一個 client 超過上限就回 429（失敗封套）；不存在的路徑也計入。
+3. FastAPI 以 pydantic 驗證輸入。
+4. Router 只解析輸入、呼叫 service、回傳 `success(...)`；`response_model=Envelope[...]` 宣告回應格式。
+5. 任何錯誤都由 `core/handlers.py` 的 exception handler 依失敗表回覆；不存在的路由與不允許的方法也是。客戶端看不到框架或內部的訊息。
+6. 互動式文件與 OpenAPI 文件已關閉。
 
 ## 指令
 
@@ -29,15 +30,19 @@ FastAPI、Python 3.12 以上、pydantic 2、pydantic-settings、loguru、pytest�
 
 啟動時只讀一次並驗證，位置在 `src/core/config.py`。沒有 `.env` 也能啟動；`.env.example` 只放假的範例值。
 
-| 變數        | 預設值    | 說明       |
-| ----------- | --------- | ---------- |
-| `HOST`      | `0.0.0.0` | 監聽的位址 |
-| `PORT`      | `8000`    | 監聽的埠   |
-| `LOG_LEVEL` | `INFO`    | 日誌等級   |
+| 變數                        | 預設值    | 說明                                                                         |
+| --------------------------- | --------- | ---------------------------------------------------------------------------- |
+| `HOST`                      | `0.0.0.0` | 監聽的位址                                                                   |
+| `PORT`                      | `8000`    | 監聽的埠                                                                     |
+| `LOG_LEVEL`                 | `INFO`    | 日誌等級                                                                     |
+| `RATE_LIMIT_MAX`            | `300`     | 每個 client 在一個時間窗內的請求上限                                         |
+| `RATE_LIMIT_WINDOW_SECONDS` | `60`      | 速率限制的時間窗，單位為秒                                                   |
+| `TRUST_PROXY`               | 空        | 前面有反向代理時，填代理的位址或網段（逗號分隔）；空表示以連線的來源位址計算 |
 
 ## 目前的模組
 
-`hello`（`src/hello/`）：`GET /api/v1/hello`，`router.py`、`service.py`、`schemas.py` 各一個檔案。
+- `hello`（`src/hello/`）：`GET /api/v1/hello`，`router.py`、`service.py`、`schemas.py` 各一個檔案。
+- `health`（`src/health/`）：`GET /api/health`，只有 `router.py`；在 `/api/v1` 之外，回封套之外的 `{"status":"ok"}`，不受速率限制。
 
 ## 擴充方式
 

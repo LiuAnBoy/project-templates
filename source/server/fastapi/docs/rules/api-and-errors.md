@@ -62,6 +62,48 @@ Rules:
 - `RequestContextMiddleware` in `src/core/middleware.py` puts `x-request-id` on every response (the caller's when it matches `[A-Za-z0-9._-]{8,128}`, otherwise a new UUID) and writes the access log line.
 - The interactive docs and the OpenAPI document are switched off.
 
+## Rate limiting
+
+### Default
+
+Every route is limited per client from the first boot, with no setup: 300 requests per 60 seconds, counted across all routes together. The default is generous on purpose, because a limit that blocks real users costs more than one that is loose; lower it where the traffic is known. A request over the limit is answered 429 in the failure envelope with the `too_many_requests` message (`{"success":false,"payload":{"message":"too many requests"}}`) and a `Retry-After` header.
+
+The settings are environment variables, validated at boot in `src/core/config.py` and listed in `.env.example`:
+
+| Variable                    | Default | Meaning                                               |
+| --------------------------- | ------- | ----------------------------------------------------- |
+| `RATE_LIMIT_MAX`            | `300`   | Requests allowed per client in one window, at least 1 |
+| `RATE_LIMIT_WINDOW_SECONDS` | `60`    | The window in seconds, at least 1                     |
+| `TRUST_PROXY`               | empty   | Which proxies' forwarded address is believed (below)  |
+
+### Wiring and the store
+
+`RateLimitMiddleware` in `src/core/rate_limit.py` is a pure ASGI middleware over the `limits` package (a fixed window per client). `create_app` in `src/main.py` is the wiring place: it passes the numbers from the settings, and it adds the limit before `RequestContextMiddleware`, so the request context is the outer layer and a refused request still gets an id and an access log line. The middleware runs before routing, so a request to an unknown path is counted too.
+
+The `limits` async storage (`limits.aio.storage.Storage`) is the port: the middleware is given one and never builds it. `create_memory_storage()` is the default, the memory of one process. A second instance would count on its own, so with more than one the real limit is multiplied and a client balanced across them is counted loosely. The shared storage, which the Redis overlay provides, replaces that one call in `create_app`; no other file changes.
+
+### The client
+
+The limit counts the socket address, `scope["client"]`, unless `TRUST_PROXY` is set. `TRUST_PROXY` is a comma-separated list of the addresses or ranges of the reverse proxies in front of the server (`10.0.0.1,172.16.0.0/12`; `loopback`, `linklocal` and `uniquelocal` are accepted names). Then `x-forwarded-for` is believed only on a connection from one of them, and the client is the first address from the right that is not one of them. An IPv6 client is counted as its `/64` network, and an IPv4-mapped address as the IPv4 address, so one client cannot take a new bucket by varying the low bits.
+
+Without this rule a header from an unproxied caller is free text, and a caller could take a new bucket per request by changing it. So a blanket value (`true`, `*`, `0.0.0.0/0`) and a bare count are refused at boot. `TRUST_PROXY` is the single setting: `make dev` and `main.py` start uvicorn with proxy headers off, so uvicorn does not rewrite the client address behind it. `client_address` in `src/core/middleware.py`, which the access log uses, reads the headers as given and is for logs only. With no proxy trusted, a log line can name a forged address while the limit counts the socket address. Never use it to decide anything.
+
+### Behind a proxy or a web server
+
+- Behind a reverse proxy, set `TRUST_PROXY` to the proxy addresses. Left unset, every visitor arrives from the proxy's address and shares one bucket, which can lock everyone out at once.
+- A web server in front of this API (the Next template) reaches it from its own address. A page rendered on that server calls the API with no visitor address, because the server-side request carries none of the visitor's headers. The rewrite that forwards the browser's `/api/v1` calls adds no `x-forwarded-for` either (checked in Next 16.4.5); it passes on what the visitor or the proxy in front of Next sent. So with `TRUST_PROXY` unset, every call that reaches the API through the web server, from a page or from the browser, is counted under the web server's address: one bucket of 300 per 60 seconds for the whole site.
+- A deployment with a web server in front must therefore do one or both of these. Put a proxy in front of the web server that sets `x-forwarded-for`, and set `TRUST_PROXY` to the addresses of the web server and that proxy: calls the browser makes are then counted per visitor. Raise `RATE_LIMIT_MAX` to the volume of the server-rendered calls, because those stay in the web server's bucket until the web server forwards the visitor's address with each server-side call.
+
+### Exempting a route
+
+Only the health route is exempt by default, and it is the worked example. A path that must never be refused, such as a probe or a signature-verified webhook, goes in the `exempt_paths` argument of `RateLimitMiddleware` in `create_app`, as an exact request path (`HEALTH_PATH`, `/api/health`, is there now). A probe from a load balancer is otherwise counted against the balancer's address, and one answered 429 reads as a dead service.
+
+## The health route
+
+Every route is under `/api/v1/` except `GET /api/health`. It is the liveness probe: `src/health/router.py` is included in `create_app` without the `API_PREFIX`, and it is one of the envelope exceptions above, so it returns a plain dict and skips `success()`: 200 with exactly `{"status":"ok"}`, because a load balancer reads the bare body. It touches no dependency, because no store ships; a data overlay adds its checks and answers 503 `{"status":"unavailable"}` when one is down. A route with no dependency needs no port or factory.
+
+It is public and stays public when authentication is added: mark it `@public` in the same change. It is exempt from the rate limit.
+
 ## Auth
 
 ### Current state
@@ -86,6 +128,6 @@ After those steps, authentication is on by default and enforced once, above ever
 - Access tokens are short-lived JWTs (minutes). The signing secret comes from the env schema with a minimum length of 32.
 - Refresh tokens are stored as a digest, never raw, and rotate on every use. A rotated token presented again is treated as theft and revokes its whole family.
 - Authorisation is checked in one place (a guard or a policy function), not scattered through handlers.
-- Rate-limit with a store shared across instances (Redis). Never trust all proxies: the proxy trust setting is a count or a list of specific addresses, because a blanket value lets any caller forge `X-Forwarded-For`. `client_address` reads the forwarded headers as given and is correct only behind a proxy that overwrites them.
+- Rate limiting is already on (see Rate limiting). With more than one instance, give it the shared storage (Redis) and set `TRUST_PROXY` to the proxies in front; never trust all proxies, because a blanket value lets any caller forge `X-Forwarded-For`.
 - CORS allows the one web origin from config, never `*` with credentials. Add a security-headers middleware; this template registers none.
 - Secrets and tokens are never logged. Webhook receivers verify a signature over the raw body before parsing it.

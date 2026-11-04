@@ -97,6 +97,23 @@ message 只含固定文字，或伺服器自己定義的名稱；message 不含�
 | `unavailable`            | 503    | `service unavailable`                          | 相依服務（資料庫、Redis 等）連不上或逾時；client 應該重試。                                                         |
 | `internal`               | 500    | `internal error`                               | 其他未預期的錯誤；細節只寫進伺服器 log。                                                                            |
 
+## 速率限制
+
+每條路由預設都有速率限制，不需要任何設定：每個 client 每 60 秒 300 次，所有路由（包含不存在的路徑）合計。超過時回 429 `too many requests`，用失敗封套，並帶 `Retry-After` 標頭（秒）。
+
+調整方式是環境變數，寫在 `.env`（範例在 `.env.example`），啟動時驗證：
+
+| 變數                        | 預設值 | 說明                                             |
+| --------------------------- | ------ | ------------------------------------------------ |
+| `RATE_LIMIT_MAX`            | `300`  | 每個 client 在一個時間窗內的請求上限，至少 1     |
+| `RATE_LIMIT_WINDOW_SECONDS` | `60`   | 時間窗，單位為秒，至少 1                         |
+| `TRUST_PROXY`               | 空     | 前面有反向代理時，填代理的位址或網段，以逗號分隔 |
+
+- client 以連線的來源位址計算。`x-forwarded-for` 預設不採信，因為沒有代理時它是呼叫者自己填的字串，會讓人繞過限制；只有來自 `TRUST_PROXY` 所列位址的連線，才採信它。`true`、`*`、`0.0.0.0/0` 這類全盤信任與單純的數字會在啟動時被拒絕。
+- 前面有反向代理或網頁伺服器時一定要設定 `TRUST_PROXY`，否則所有訪客共用代理的位址，一起被擋。Next 網頁伺服器的 server component 呼叫不帶訪客位址，部署時還要調高上限，細節在英文的 [../rules/api-and-errors.md](../rules/api-and-errors.md)。
+- 計數存在單一程序的記憶體；跑第二個 instance 時要改用共用儲存（Redis overlay 提供）。
+- 預設沒有任何路由豁免。路徑要豁免（例如探針）時，把它的完整路徑加進 `create_app` 裡 `RateLimitMiddleware` 的 `exempt_paths`。
+
 ## Query
 
 query 用函式參數或 pydantic model 驗證，型別由 pydantic 轉換。驗證失敗是 400 `invalid request`。query 的 key 一律是 snake_case。

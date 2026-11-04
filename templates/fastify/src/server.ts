@@ -9,9 +9,18 @@ import {
 import { registerErrorHandling } from './common/http/error-handler.js';
 import { registerJsonBodyParser } from './common/http/json-body-parser.js';
 import {
+  DEFAULT_RATE_LIMIT,
+  type TrustProxy,
+} from './common/http/rate-limit-env.js';
+import {
+  registerRateLimit,
+  type RateLimitOptions,
+} from './common/http/rate-limit.js';
+import {
   registerRequestId,
   resolveRequestId,
 } from './common/http/request-id.js';
+import { healthRoutes } from './health/routes.js';
 import type { ServerModule } from './common/module.js';
 import { createLogger } from './common/logging/logger-options.js';
 
@@ -24,6 +33,14 @@ export type ServerOptions = {
   logLevel?: string;
   /** Where log records go; stdout when omitted. */
   logStream?: NodeJS.WritableStream;
+  /**
+   * Which forwarded addresses to believe: `false` (the default) counts the
+   * socket address, a list of proxy addresses trusts the forwarded header on
+   * a connection from one of them. The one setting both the client address and the limit read.
+   */
+  trustProxy?: TrustProxy;
+  /** The request limit; 300 per 60 seconds, in process memory, when omitted. */
+  rateLimit?: RateLimitOptions;
   /** The domains to mount under `/api/v1`; each is built by its own factory. */
   modules?: ServerModule[];
 };
@@ -32,11 +49,11 @@ export type ServerOptions = {
  * Builds the Fastify instance without listening, so tests can use `app.inject()`.
  *
  * Everything the process needs is registered here and nowhere else, so a test
- * boots exactly what `main.ts` boots. Registration order matters: the error
- * handlers and the body parser go on the root instance before any route, so
- * every scope inherits them.
+ * boots exactly what `main.ts` boots. Registration order matters: the rate
+ * limit, the error handlers and the body parser go on the root instance before
+ * any route, so every scope inherits them.
  *
- * @param options - Log level, log stream and the modules to mount.
+ * @param options - Log level, log stream, proxy trust, rate limit and the modules to mount.
  * @returns The configured instance, not yet listening.
  */
 export async function buildServer(options: ServerOptions = {}) {
@@ -46,15 +63,22 @@ export async function buildServer(options: ServerOptions = {}) {
     requestIdHeader: false,
     genReqId: (request) => resolveRequestId(request.headers['x-request-id']),
     bodyLimit: JSON_BODY_LIMIT_BYTES,
+    trustProxy: options.trustProxy ?? false,
   }).withTypeProvider<ZodTypeProvider>();
 
   app.setValidatorCompiler(validatorCompiler);
   app.setSerializerCompiler(serializerCompiler);
 
   registerRequestId(app);
-  registerErrorHandling(app);
+  const limitUnknownPaths = await registerRateLimit(
+    app,
+    options.rateLimit ?? DEFAULT_RATE_LIMIT,
+  );
+  registerErrorHandling(app, limitUnknownPaths);
   registerJsonBodyParser(app);
   await app.register(helmet, { contentSecurityPolicy: false });
+
+  await app.register(healthRoutes);
 
   for (const module of options.modules ?? []) {
     await app.register(module, { prefix: '/api/v1' });

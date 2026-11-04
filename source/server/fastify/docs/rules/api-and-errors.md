@@ -63,6 +63,50 @@ Rules:
 - The JSON body parser is replaced (`registerJsonBodyParser`) so a malformed body answers from the table and an empty JSON body parses to `{}`. Fastify's own safe parser still does the parsing.
 - Every response carries `x-request-id`: the caller's when it matches `[A-Za-z0-9._-]{8,128}`, otherwise a new UUID.
 
+## Rate limiting
+
+### Default
+
+Every route is limited per client from the first boot, with no setup: 300 requests per 60 seconds, counted across all routes together. The default is generous on purpose, because a limit that blocks real users costs more than one that is loose; lower it where the traffic is known. A request over the limit is answered 429 in the failure envelope with the `tooManyRequests` message (`{"success":false,"payload":{"message":"too many requests"}}`) and the package's `Retry-After` header. The package's own body never reaches the client.
+
+The settings are environment variables, validated at boot in `src/config.ts` and listed in `.env.example`:
+
+| Variable                    | Default | Meaning                                               |
+| --------------------------- | ------- | ----------------------------------------------------- |
+| `RATE_LIMIT_MAX`            | `300`   | Requests allowed per client in one window, at least 1 |
+| `RATE_LIMIT_WINDOW_SECONDS` | `60`    | The window in seconds, at least 1                     |
+| `TRUST_PROXY`               | empty   | Which proxies' forwarded address is believed (below)  |
+
+A route that needs a tighter limit (sign-in, anything expensive) takes its own `config: { rateLimit: { max, timeWindow } }` and is then counted apart from the shared count.
+
+### Wiring and the store
+
+`registerRateLimit` in `src/common/http/rate-limit.ts` registers `@fastify/rate-limit` once on the root instance in `buildServer`, before any route; `main.ts` passes the numbers from the config. A request to an unknown path is counted against the same limit through the `preHandler` of the not-found handler.
+
+The store class of `@fastify/rate-limit` is the port: `buildServer({ rateLimit: { max, windowSeconds, store } })` takes one, and without it the package keeps the counts in the memory of one process. A second instance would count on its own, so with more than one the real limit is multiplied and a client balanced across them is counted loosely. The shared store, which the Redis overlay provides, is passed at the one wiring place in `main.ts`; no other file changes.
+
+### The client
+
+The limit counts `request.ip`. Fastify reports the socket address, and trusts a forwarded header only when `TRUST_PROXY` is set. `TRUST_PROXY` is a comma-separated list of the addresses or ranges of the reverse proxies in front of the server (`10.0.0.1,172.16.0.0/12`; `loopback`, `linklocal` and `uniquelocal` are accepted names). Then `x-forwarded-for` is believed only on a connection from one of them, and the client is the first address from the right that is not one of them.
+
+Without this rule a header from an unproxied caller is free text, and a caller could take a new bucket per request by changing it. So a blanket value (`true`, `*`, `0.0.0.0/0`) and a bare hop count are refused at boot. `TRUST_PROXY` is the single setting: it goes to `Fastify({ trustProxy })`, so it decides `request.ip` for the limit and everything else. `getClientAddress`, which the access log uses, reads the headers as given and is for logs only. With no proxy trusted, a log line can name a forged address while the limit counts the socket address. Never use it to decide anything.
+
+### Behind a proxy or a web server
+
+- Behind a reverse proxy, set `TRUST_PROXY` to the proxy addresses. Left unset, every visitor arrives from the proxy's address and shares one bucket, which can lock everyone out at once.
+- A web server in front of this API (the Next template) reaches it from its own address. A page rendered on that server calls the API with no visitor address, because the server-side request carries none of the visitor's headers. The rewrite that forwards the browser's `/api/v1` calls adds no `x-forwarded-for` either (checked in Next 16.4.5); it passes on what the visitor or the proxy in front of Next sent. So with `TRUST_PROXY` unset, every call that reaches the API through the web server, from a page or from the browser, is counted under the web server's address: one bucket of 300 per 60 seconds for the whole site.
+- A deployment with a web server in front must therefore do one or both of these. Put a proxy in front of the web server that sets `x-forwarded-for`, and set `TRUST_PROXY` to the addresses of the web server and that proxy: calls the browser makes are then counted per visitor. Raise `RATE_LIMIT_MAX` to the volume of the server-rendered calls, because those stay in the web server's bucket until the web server forwards the visitor's address with each server-side call.
+
+### Exempting a route
+
+Only the health route is exempt by default, and it is the worked example. A route that must never be refused, such as a probe or a signature-verified webhook, takes `config: { rateLimit: false }` in its route options, as `src/health/routes.ts` does. A probe from a load balancer is otherwise counted against the balancer's address, and one answered 429 reads as a dead service.
+
+## The health route
+
+Every route is under `/api/v1/` except `GET /api/health`. It is the liveness probe, mounted on the root in `buildServer` outside the versioned prefix, and it is one of the envelope exceptions above: it answers 200 with exactly `{"status":"ok"}`, because a load balancer reads the bare body. It touches no dependency, because no store ships; a data overlay adds its checks and answers 503 `{"status":"unavailable"}` when one is down. A route with no dependency needs no port or factory.
+
+It is public and stays public when authentication is added: mark it with the same opt-out as every other open route in the same change. It is exempt from the rate limit.
+
 ## Auth
 
 ### Current state
@@ -85,6 +129,6 @@ After those steps, authentication is on by default and enforced once, above ever
 - Access tokens are short-lived JWTs (minutes). The signing secret comes from the env schema with a minimum length of 32.
 - Refresh tokens are stored as a digest, never raw, and rotate on every use. A rotated token presented again is treated as theft and revokes its whole family.
 - Authorisation is checked in one place (a guard or a policy function), not scattered through handlers.
-- Rate-limit with a store shared across instances (Redis). Never trust all proxies: `trustProxy` is a hop count or a list of specific addresses, because a blanket value lets any caller forge `X-Forwarded-For`. `getClientAddress` reads the forwarded headers as given and is correct only behind a proxy that overwrites them.
+- Rate limiting is already on (see Rate limiting). With more than one instance, give it the shared store (Redis) and set `TRUST_PROXY` to the proxies in front; never trust all proxies, because a blanket value lets any caller forge `X-Forwarded-For`.
 - CORS allows the one web origin from config, never `*` with credentials. Security headers are already registered (`@fastify/helmet`).
 - Secrets and tokens are never logged. Webhook receivers verify a signature over the raw body before parsing it.

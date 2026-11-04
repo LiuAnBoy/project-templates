@@ -2,7 +2,7 @@
 
 Stack: FastAPI on Python 3.12 or later, pydantic 2 and pydantic-settings, loguru, pytest, ruff, uv. No database yet; when one is needed: PostgreSQL through SQLAlchemy 2 with Alembic migrations generated from the models (`docs/rules/postgres.md`).
 
-This is a starter with one public route, `GET /api/v1/hello`, built on the shared handlers (envelope, failure table, exception handlers, request id, access log). Add modules on top of them; do not rewrite them.
+This is a starter with two public routes, `GET /api/v1/hello` and the liveness probe `GET /api/health` (outside `/api/v1` and the envelope), built on the shared handlers (envelope, failure table, exception handlers, request id, access log). Add modules on top of them; do not rewrite them.
 
 ## FastAPI rules
 
