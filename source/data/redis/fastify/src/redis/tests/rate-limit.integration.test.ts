@@ -102,7 +102,7 @@ describe('the rate limit in Redis', () => {
   it('keeps every counter under the service prefix, with a TTL', async () => {
     const keys = await keysWithPrefix(first.client, target.prefix);
 
-    expect(keys.length).toBeGreaterThan(0);
+    expect(keys).toContain(`${target.prefix}:rate-limit:10.9.9.9`);
     for (const key of keys) {
       expect(key.startsWith(`${target.prefix}:rate-limit:`)).toBe(true);
       expect(await first.client.pttl(key)).toBeGreaterThan(0);

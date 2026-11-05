@@ -10,14 +10,16 @@ import BetterSqlite3 from 'better-sqlite3';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
 import { migrate } from 'drizzle-orm/better-sqlite3/migrator';
 
+import { INVALID_DATABASE_PATH, isDatabasePath } from './database-path.mjs';
+
 const MIGRATIONS_TABLE = '__drizzle_migrations';
 
 /**
- * Opens the database file named by `DATABASE_URL`.
+ * Opens the database file named by `DATABASE_URL`, under the rule the server applies.
  *
  * @param {{forMigrate: boolean}} options `forMigrate` creates the file (and its folder) when missing.
  * @returns {Promise<import('./runner.mjs').Store>} The store.
- * @throws {Error} When `DATABASE_URL` is not set.
+ * @throws {Error} When `DATABASE_URL` is not set, or is not the path of a file.
  */
 export async function openStore({ forMigrate }) {
   const path = process.env.DATABASE_URL;
@@ -26,6 +28,7 @@ export async function openStore({ forMigrate }) {
       'DATABASE_URL is required: copy .env.example to .env first.',
     );
   }
+  if (!isDatabasePath(path)) throw new Error(INVALID_DATABASE_PATH);
   if (!forMigrate && !existsSync(path)) {
     return {
       table: MIGRATIONS_TABLE,

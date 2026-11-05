@@ -6,6 +6,7 @@ import { bounded } from '../common/concurrency/bounded.js';
 import { CHECK_TIMEOUT_MS } from '../common/dependency-checks.js';
 import { createNestingGuard } from './nesting-guard.js';
 import * as schema from './schema/index.js';
+import { createTransactionEnd } from './transaction-end.js';
 import type { DatabasePort, TransactionRunner } from './types.js';
 
 /**
@@ -79,6 +80,13 @@ const CLOSE_WAIT_MS = 1000;
  * exhaust the pool when several requests nest at the same time: pass the transaction
  * handle down instead.
  *
+ * Each `run` gives Drizzle a client of its own that exposes only `query` and refuses a
+ * statement once the callback has settled (`createTransactionEnd`), because a builder or
+ * a prepared statement made before the end reaches the driver through that client, and
+ * the connection underneath goes back to the pool for someone else. The check also runs
+ * as Drizzle's logger, which it calls outside its error wrapper, so the fixed message is
+ * what the caller sees.
+ *
  * The probe's query has a deadline of its own, because `bounded()` only ends the
  * caller's wait: on a server that went silent, a query with no deadline keeps its
  * connection until the socket dies, and the probes of the health route would use up
@@ -115,7 +123,29 @@ export function createDatabase(
   const db = drizzle({ client: pool, schema });
   const guard = createNestingGuard('postgres', 'transaction handle');
   const transactions: TransactionRunner<DatabaseTransaction> = {
-    run: (work) => guard.enter(() => db.transaction(work)),
+    run: (work) =>
+      guard.enter(async () => {
+        const client = await pool.connect();
+        const end = createTransactionEnd();
+        const scoped = drizzle({
+          client: {
+            query: (query: { text?: string }, ...rest: unknown[]) => {
+              end.check(query.text);
+              return Reflect.apply(client.query, client, [query, ...rest]);
+            },
+          } as unknown as pg.PoolClient,
+          schema,
+          logger: { logQuery: (statement) => end.check(statement) },
+        });
+        try {
+          return await scoped.transaction((tx) =>
+            end.during(() => work(end.handle(tx))),
+          );
+        } finally {
+          end.finish();
+          client.release();
+        }
+      }),
   };
   let closed = false;
   return {

@@ -1,6 +1,8 @@
 import asyncio
+import gc
 import logging
 import time
+import warnings
 from collections.abc import Awaitable, Callable
 from types import SimpleNamespace
 
@@ -17,6 +19,7 @@ from core.dependency import is_dependency_outage
 from core.failure import format_failure
 from core.logging import configure_logging
 from db.database import create_database
+from db.session_end import TRANSACTION_ENDED_TEXT, TransactionEndedError
 from db.types import DatabasePort
 
 Body = Callable[[DatabasePort, Probe], Awaitable[None]]
@@ -224,6 +227,229 @@ def test_a_connection_killed_inside_a_run_is_an_outage_and_the_next_run_works() 
         assert "SQLSTATE 57P01" in format_failure(raised.value)
         await database.transactions.run(lambda session: probe.insert(session, "after-kill"))
         assert await _read(database, probe, "after-kill")
+
+    _scenario(body)
+
+
+async def _kept_session(database: DatabasePort) -> AsyncSession:
+    """Open a transaction, let it commit, and give back the session the work kept."""
+    kept: list[AsyncSession] = []
+
+    async def work(session: AsyncSession) -> None:
+        kept.append(session)
+
+    await database.transactions.run(work)
+    return kept[0]
+
+
+def _pinned(database: DatabasePort) -> int:
+    return database.session_factory.kw["bind"].pool.checkedout()
+
+
+async def _idle_in_transaction(database: DatabasePort) -> int:
+    async with database.session_factory() as session:
+        found = await session.execute(
+            text(
+                "select count(*) from pg_stat_activity where state = 'idle in transaction' "
+                "and usename = current_user and pid <> pg_backend_pid()"
+            )
+        )
+        return found.scalar_one()
+
+
+def test_a_session_used_after_the_commit_raises_and_holds_no_connection() -> None:
+    async def body(database: DatabasePort, _probe: Probe) -> None:
+        session = await _kept_session(database)
+
+        with pytest.raises(TransactionEndedError) as raised:
+            await session.execute(text("select 1"))
+
+        assert str(raised.value) == TRANSACTION_ENDED_TEXT
+        assert not is_dependency_outage(raised.value)
+        assert TRANSACTION_ENDED_TEXT in format_failure(raised.value)
+        assert _pinned(database) == 0
+
+    _scenario(body)
+
+
+def test_a_session_used_after_the_rollback_raises_and_writes_nothing() -> None:
+    async def body(database: DatabasePort, probe: Probe) -> None:
+        kept: list[AsyncSession] = []
+
+        async def work(session: AsyncSession) -> None:
+            kept.append(session)
+            raise ValueError("boom")
+
+        with pytest.raises(ValueError, match="boom"):
+            await database.transactions.run(work)
+
+        with pytest.raises(TransactionEndedError):
+            await probe.insert(kept[0], "after-rollback")
+        with pytest.raises(TransactionEndedError):
+            await kept[0].commit()
+
+        assert not await _read(database, probe, "after-rollback")
+        assert _pinned(database) == 0
+
+    _scenario(body)
+
+
+def test_forty_concurrent_uses_after_the_end_leave_the_pool_serving() -> None:
+    """Reproduces the starved pool: each kept session used to pin a connection for good."""
+
+    async def body(database: DatabasePort, _probe: Probe) -> None:
+        async def call() -> None:
+            session = await _kept_session(database)
+            await session.execute(text("select 1"))
+
+        outcomes = await asyncio.gather(*(call() for _ in range(40)), return_exceptions=True)
+
+        assert all(isinstance(outcome, TransactionEndedError) for outcome in outcomes)
+        assert await _idle_in_transaction(database) == 0
+        await bounded(database.probe(), 2.0, "postgres")
+
+    _scenario(body)
+
+
+def test_a_task_still_running_when_the_work_ends_gets_the_same_error() -> None:
+    async def body(database: DatabasePort, probe: Probe) -> None:
+        tasks: list[asyncio.Task[None]] = []
+
+        async def later(session: AsyncSession) -> None:
+            await asyncio.sleep(0.05)
+            await probe.insert(session, "late-task")
+
+        async def work(session: AsyncSession) -> None:
+            tasks.append(asyncio.create_task(later(session)))
+
+        await database.transactions.run(work)
+
+        with pytest.raises(TransactionEndedError):
+            await tasks[0]
+        assert not await _read(database, probe, "late-task")
+        assert _pinned(database) == 0
+
+    _scenario(body)
+
+
+def test_a_statement_in_flight_when_the_work_ends_leaves_nothing_pinned() -> None:
+    async def body(database: DatabasePort, probe: Probe) -> None:
+        tasks: list[asyncio.Task[object]] = []
+
+        async def work(session: AsyncSession) -> None:
+            tasks.append(asyncio.create_task(session.execute(text("select pg_sleep(0.2)"))))
+            await asyncio.sleep(0.05)
+
+        # Two users of one session at once are refused by SQLAlchemy itself, so the run may
+        # fail too; what matters is that neither side keeps the connection.
+        await asyncio.gather(database.transactions.run(work), return_exceptions=True)
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+        await asyncio.sleep(0.3)
+        assert _pinned(database) == 0
+        assert await _idle_in_transaction(database) == 0
+        await database.transactions.run(lambda session: probe.insert(session, "after-flight"))
+
+    _scenario(body)
+
+
+def test_a_session_stored_by_a_repository_refuses_too() -> None:
+    class Repository:
+        session: AsyncSession
+
+        def bind(self, session: AsyncSession) -> None:
+            self.session = session
+
+        async def count(self) -> object:
+            return await self.session.execute(text("select 1"))
+
+    async def body(database: DatabasePort, _probe: Probe) -> None:
+        repository = Repository()
+
+        async def work(session: AsyncSession) -> None:
+            repository.bind(session)
+
+        await database.transactions.run(work)
+
+        with pytest.raises(TransactionEndedError):
+            await repository.count()
+
+    _scenario(body)
+
+
+def test_what_a_session_handed_out_refuses_too_and_no_stale_driver_can_write() -> None:
+    async def body(database: DatabasePort, probe: Probe) -> None:
+        kept: dict[str, object] = {}
+
+        async def work(session: AsyncSession) -> None:
+            connection = await session.connection()
+            raw = await connection.get_raw_connection()
+            kept.update(
+                sync=session.sync_session,
+                connection=connection,
+                driver=raw.driver_connection,
+            )
+
+        await database.transactions.run(work)
+        statement = f"insert into \"{probe.schema}\".probe (id) values ('from-driver')"
+
+        with pytest.raises(TransactionEndedError):
+            kept["sync"].execute(text("select 1"))  # type: ignore[attr-defined]
+        with pytest.raises(TransactionEndedError):
+            await kept["connection"].execute(text("select 1"))  # type: ignore[attr-defined]
+        with pytest.raises(TransactionEndedError):
+            await kept["driver"].execute(statement)  # type: ignore[attr-defined]
+
+        assert not await _read(database, probe, "from-driver")
+        assert _pinned(database) == 0
+        await database.transactions.run(lambda session: probe.insert(session, "after-driver"))
+        assert await _read(database, probe, "after-driver")
+
+    _scenario(body)
+
+
+def test_an_ordinary_transaction_keeps_its_connection_in_the_pool() -> None:
+    async def body(database: DatabasePort, _probe: Probe) -> None:
+        async def backend(session: AsyncSession) -> object:
+            return (await session.execute(text("select pg_backend_pid()"))).scalar_one()
+
+        pids = {await database.transactions.run(backend) for _ in range(5)}
+
+        assert len(pids) == 1
+
+    _scenario(body)
+
+
+def test_a_factory_session_ends_with_its_block() -> None:
+    async def body(database: DatabasePort, _probe: Probe) -> None:
+        async with database.session_factory() as session:
+            await session.execute(text("select 1"))
+
+        with pytest.raises(TransactionEndedError):
+            await session.execute(text("select 1"))
+        await session.close()
+        assert _pinned(database) == 0
+
+    _scenario(body)
+
+
+def test_a_session_nothing_closed_warns_without_a_connection_value() -> None:
+    url = make_url(require_local_url("TEST_DATABASE_URL"))
+
+    async def body(database: DatabasePort, _probe: Probe) -> None:
+        async def leak() -> None:
+            leaked = database.session_factory()
+            await leaked.execute(text("select 1"))
+
+        with warnings.catch_warnings(record=True) as seen:
+            warnings.simplefilter("always")
+            await leak()
+            gc.collect()
+
+        texts = " ".join(str(warning.message) for warning in seen)
+        assert "garbage collector" in texts
+        for value in ("host=", "port=", "user=", "database=", url.host, str(url.port)):
+            assert value not in texts
 
     _scenario(body)
 

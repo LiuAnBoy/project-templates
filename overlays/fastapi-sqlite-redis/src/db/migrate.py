@@ -21,6 +21,7 @@ from alembic.runtime.migration import MigrationContext
 from alembic.script import ScriptDirectory
 from alembic.script.revision import RevisionError
 from alembic.util import CommandError
+from pydantic import ValidationError
 from sqlalchemy import Connection
 from sqlalchemy.ext.asyncio import AsyncEngine
 
@@ -381,6 +382,9 @@ def describe_migrate_failure(error: BaseException) -> str:
 def _run(task: Callable[[], Awaitable[None]]) -> int:
     """Run a command and turn a failure into a message on stderr and exit code 1.
 
+    A setting the server would refuse is refused in the server's own words, by the same
+    validator, before anything touches the store.
+
     Args:
         task: The command.
 
@@ -389,6 +393,10 @@ def _run(task: Callable[[], Awaitable[None]]) -> int:
     """
     try:
         asyncio.run(task())
+    except ValidationError as error:
+        names = dict.fromkeys(str(issue["loc"][0]).upper() for issue in error.errors())
+        sys.stderr.write(f"invalid configuration: {', '.join(names)}\n")
+        return 1
     except Exception as error:  # any failure is reported, never raised raw
         sys.stderr.write(f"{describe_migrate_failure(error)}\n")
         return 1

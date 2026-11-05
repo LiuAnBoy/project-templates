@@ -6,9 +6,12 @@ from types import SimpleNamespace
 import pytest
 from db_support import database_file, exists, insert
 from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.dependency import is_dependency_outage
+from core.failure import format_failure
 from db.database import DatabaseOptions, create_database
+from db.session_end import TRANSACTION_ENDED_TEXT, TransactionEndedError
 from db.types import DatabasePort
 
 
@@ -146,6 +149,151 @@ def test_a_run_that_outwaits_the_bound_fails_as_a_busy_store_and_the_runner_stay
         assert await _read(database, "after-busy")
 
     _scenario(body, DatabaseOptions(write_wait_seconds=0.3))
+
+
+async def _kept_session(database: DatabasePort) -> AsyncSession:
+    """Open a transaction, let it commit, and give back the session the work kept."""
+    kept: list[AsyncSession] = []
+
+    async def work(session: AsyncSession) -> None:
+        kept.append(session)
+
+    await database.transactions.run(work)
+    return kept[0]
+
+
+def test_a_session_used_after_the_commit_raises_and_the_next_write_does_not_wait() -> None:
+    """Reproduces the stopped writer: one kept session used to block every write for good."""
+
+    async def body(database: DatabasePort) -> None:
+        session = await _kept_session(database)
+
+        with pytest.raises(TransactionEndedError) as raised:
+            await session.execute(text("select 1"))
+
+        assert str(raised.value) == TRANSACTION_ENDED_TEXT
+        assert not is_dependency_outage(raised.value)
+        assert TRANSACTION_ENDED_TEXT in format_failure(raised.value)
+
+        async def next_write(next_session: AsyncSession) -> None:
+            await insert(next_session, "after-stale")
+
+        await database.transactions.run(next_write)
+        assert await _read(database, "after-stale")
+
+    _scenario(body, DatabaseOptions(write_wait_seconds=0.3))
+
+
+def test_a_session_used_after_the_rollback_raises_and_writes_nothing() -> None:
+    async def body(database: DatabasePort) -> None:
+        kept: list[AsyncSession] = []
+
+        async def work(session: AsyncSession) -> None:
+            kept.append(session)
+            raise ValueError("boom")
+
+        with pytest.raises(ValueError, match="boom"):
+            await database.transactions.run(work)
+
+        with pytest.raises(TransactionEndedError):
+            await insert(kept[0], "after-rollback")
+        with pytest.raises(TransactionEndedError):
+            await kept[0].commit()
+
+        assert not await _read(database, "after-rollback")
+
+    _scenario(body, DatabaseOptions(write_wait_seconds=0.3))
+
+
+def test_a_task_still_running_when_the_work_ends_gets_the_same_error() -> None:
+    async def body(database: DatabasePort) -> None:
+        tasks: list[asyncio.Task[None]] = []
+
+        async def later(session: AsyncSession) -> None:
+            await asyncio.sleep(0.05)
+            await insert(session, "late-task")
+
+        async def work(session: AsyncSession) -> None:
+            tasks.append(asyncio.create_task(later(session)))
+
+        await database.transactions.run(work)
+
+        with pytest.raises(TransactionEndedError):
+            await tasks[0]
+        assert not await _read(database, "late-task")
+
+    _scenario(body, DatabaseOptions(write_wait_seconds=0.3))
+
+
+def test_a_task_started_inside_a_run_that_runs_after_it_ended_opens_its_own() -> None:
+    async def body(database: DatabasePort) -> None:
+        tasks: list[asyncio.Task[None]] = []
+
+        async def own(session: AsyncSession) -> None:
+            await insert(session, "own-after")
+
+        async def later() -> None:
+            await asyncio.sleep(0.05)
+            await database.transactions.run(own)
+
+        async def work(_session: AsyncSession) -> None:
+            tasks.append(asyncio.create_task(later()))
+
+        await database.transactions.run(work)
+        await tasks[0]
+
+        assert await _read(database, "own-after")
+
+    _scenario(body)
+
+
+def test_a_kept_driver_connection_cannot_join_the_next_transaction() -> None:
+    """Every transaction shares one writer, so a kept connection would write into the next."""
+
+    async def body(database: DatabasePort) -> None:
+        kept: dict[str, object] = {}
+
+        async def work(session: AsyncSession) -> None:
+            connection = await session.connection()
+            raw = await connection.get_raw_connection()
+            kept.update(
+                sync=session.sync_session,
+                connection=connection,
+                driver=raw.driver_connection,
+            )
+
+        await database.transactions.run(work)
+
+        with pytest.raises(TransactionEndedError):
+            kept["sync"].execute(text("select 1"))  # type: ignore[attr-defined]
+        with pytest.raises(TransactionEndedError):
+            await kept["connection"].execute(text("select 1"))  # type: ignore[attr-defined]
+
+        async def other(session: AsyncSession) -> None:
+            await insert(session, "other")
+            with pytest.raises(TransactionEndedError):
+                await kept["driver"].execute(  # type: ignore[attr-defined]
+                    "insert into probe (id) values ('from-driver')"
+                )
+
+        await database.transactions.run(other)
+
+        assert await _read(database, "other")
+        assert not await _read(database, "from-driver")
+
+    _scenario(body, DatabaseOptions(write_wait_seconds=0.3))
+
+
+def test_a_factory_session_ends_with_its_block() -> None:
+    async def body(database: DatabasePort) -> None:
+        async with database.session_factory() as session:
+            await session.execute(text("select 1"))
+
+        with pytest.raises(TransactionEndedError):
+            await session.execute(text("select 1"))
+        await session.close()
+
+    _scenario(body)
 
 
 def test_a_write_through_the_reading_session_is_refused() -> None:

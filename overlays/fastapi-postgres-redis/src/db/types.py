@@ -24,13 +24,20 @@ class TransactionRunner(Protocol):
     transaction is open from code running inside it, a task the callback started
     included, is refused at once, on every store; pass the session down instead. Once
     the transaction has ended, such code opens one of its own.
+
+    The session lives exactly as long as the callback. From the moment the callback
+    settles, by return or by raise, any use of the session raises
+    :class:`~db.session_end.TransactionEndedError`, on every store: a use from a task the
+    callback left running, a session a repository stored, and the connection the session
+    handed out. It answers 500, because it is a bug and no outage, and it holds no
+    connection. A store keeps this promise through :mod:`db.session_end`.
     """
 
     async def run[T](self, work: Callable[[AsyncSession], Awaitable[T]]) -> T:
         """Run the work in a transaction.
 
         Args:
-            work: The unit of work; it receives the session of the transaction.
+            work: The unit of work; it receives the session, valid until it settles.
 
         Returns:
             What ``work`` returned, once the transaction has committed.
@@ -49,6 +56,8 @@ class DatabasePort:
     Attributes:
         name: Stable name of the store, used as the name of its dependency check.
         session_factory: Opens a session for reads and for statements that take a handle.
+            Open it with ``async with``: it ends with the block, and any later use raises
+            :class:`~db.session_end.TransactionEndedError`.
         transactions: The only way to open a transaction.
         probe: Returns when the store answers and raises when it does not; the caller
             bounds it.

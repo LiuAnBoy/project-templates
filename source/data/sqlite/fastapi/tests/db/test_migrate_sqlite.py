@@ -2,12 +2,13 @@ import asyncio
 import io
 import shutil
 import sqlite3
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
 from alembic.config import Config
 
-from db.migrate import AHEAD_WARNING, ROOT, migrate_main, run_migrate, run_status
+from db.migrate import AHEAD_WARNING, ROOT, migrate_main, run_migrate, run_status, status_main
 
 CREATE = """
 def upgrade() -> None:
@@ -206,6 +207,24 @@ def test_a_database_ahead_of_the_checkout_has_nothing_pending_and_migrate_applie
 def test_the_ahead_warning_names_no_host_user_or_path(database: Path, tmp_path: Path) -> None:
     for word in (str(tmp_path), str(database), "sqlite"):
         assert word not in AHEAD_WARNING
+
+
+@pytest.mark.parametrize("value", ["file:X.db", "sqlite://h/x.db", ":memory:"])
+@pytest.mark.parametrize("command", [migrate_main, status_main])
+def test_a_setting_that_is_not_a_path_is_refused_in_the_words_of_the_server(
+    value: str,
+    command: Callable[[], int],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("DATABASE_URL", value)
+
+    assert command() == 1
+
+    assert capsys.readouterr().err == "invalid configuration: DATABASE_URL\n"
+    assert list(tmp_path.iterdir()) == []
 
 
 def test_db_migrate_exits_zero_when_the_database_is_ahead(

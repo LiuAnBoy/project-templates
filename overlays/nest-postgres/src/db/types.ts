@@ -15,10 +15,17 @@
  * transaction is open from code running inside it, a promise or a timer the callback
  * started included, is refused at once, on every store; pass the handle down instead.
  * Once the transaction has ended, such code opens one of its own.
+ *
+ * The handle lives exactly as long as the callback. From the moment the callback
+ * settles, by return or by throw, any use of the handle throws `TransactionEndedError`,
+ * on every store: a use from work the callback left running, a handle a repository
+ * stored, a query builder or prepared statement made before the end and executed after
+ * it, and the raw client reachable from the handle. It answers 500, because it is a bug
+ * and no outage. A store keeps this promise through `createTransactionEnd`.
  */
 export type TransactionRunner<Tx> = {
   /**
-   * @param work - The unit of work; it receives the transaction handle.
+   * @param work - The unit of work; it receives the transaction handle, valid until it settles.
    * @returns What `work` returned, once the transaction has committed.
    * @throws Whatever `work` threw, after the rollback; an `Error` when called from inside another open `run`.
    */

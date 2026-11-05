@@ -4,7 +4,7 @@ SQLite is accessed through SQLAlchemy 2 on `aiosqlite`, with Alembic for migrati
 
 ## Connection settings
 
-- The server reads `DATABASE_URL`, the path of the database file, relative to the directory the server starts in. A missing value stops the boot, naming the variable.
+- The server reads `DATABASE_URL`, the path of the database file, relative to the directory the server starts in. A missing value, or one that is not a path (`:memory:`, a URI), stops the boot naming the variable. `make db-migrate` and `make db-status` read it through the same settings and refuse such a value with `invalid configuration: DATABASE_URL`, creating nothing.
 - The file must already exist. Only the migration commands (`make db-migrate`, and `make db-generate` while it compares) create it, so a wrong path stops the boot, naming the dependency and never the path, instead of starting an empty database: the store opens the file as a URI with `mode=rw`, and SQLite fails with `SQLITE_CANTOPEN` instead of creating one. `:memory:` is not supported, because the store holds two engines.
 - `src/db/database.py` is the one file that names SQLite. It exports `create_database(config)`, which returns the session factory, the transaction runner, a probe and a close, and the `src/infra/` seam calls it once. Never open the file a second time from application code.
 - The `data/` folder holds the file and has its own `.gitignore`, so the database is never committed. Back it up with `VACUUM INTO` or the `.backup` command, never by copying the file alone: WAL mode keeps recent writes in the `-wal` file beside it.
@@ -85,6 +85,9 @@ class OrderService:
 - The wait is bounded: past five seconds a writer fails as a busy store, which answers 503. A lock held by another process fails the same way once `busy_timeout` passes.
 - A `run` called from inside another open `run` is refused at once, with an error that names the cause, and answers 500 because it is a bug. It would otherwise wait for a connection its own caller holds and stop every write until a restart. Pass the session down instead. The runner stays usable after a refusal or a timeout.
 - A task that `work` starts inherits this refusal for as long as the transaction is open, and it ends with the transaction: a task that runs on after the commit may open a transaction of its own. Start one that needs the data only after `run` returns.
+- The session ends when `work` settles, before the commit or the rollback (`src/db/session_end.py`). Any later use raises `TransactionEndedError` with fixed text and answers 500: a use from a task left running, a session a repository stored, its synchronous session, and the connection it handed out. It takes no connection, so the next writer does not wait. A repository takes the session per call and never stores it.
+- Asking a connection for its `driver_connection` makes the pool close that connection when it returns, because every transaction shares it. It costs one reconnect, and a kept one raises the same error. Take it only as `(await connection.get_raw_connection()).driver_connection`: the adapted connection's own attribute of that name goes unseen, and a driver object kept from it stays live.
+- A session of `session_factory` ends with its `async with` block, the same way; open it no other way.
 - Keep a transaction short and never await a slow call, such as an HTTP request, inside it: the writing connection is held for the whole `work`.
 
 ## Rows and types

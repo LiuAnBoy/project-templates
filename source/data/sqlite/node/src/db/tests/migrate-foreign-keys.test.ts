@@ -1,4 +1,10 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -24,6 +30,30 @@ const REBUILD = [
   'ALTER TABLE `__new_parent` RENAME TO `parent`;',
   'PRAGMA foreign_keys=ON;',
 ].join(BREAKPOINT);
+
+describe('the setting db:migrate and db:status read on SQLite', () => {
+  it.each(['file:X.db', 'sqlite://h/x.db', ':memory:'])(
+    'refuses %s in the words of the server, and creates nothing',
+    async (value) => {
+      const folder = mkdtempSync(join(tmpdir(), 'sqlite-setting-'));
+      const start = process.cwd();
+      process.chdir(folder);
+      process.env.DATABASE_URL = value;
+      try {
+        for (const forMigrate of [true, false]) {
+          await expect(openStore({ forMigrate })).rejects.toThrow(
+            /^invalid configuration: DATABASE_URL$/,
+          );
+        }
+        expect(readdirSync(folder)).toEqual([]);
+      } finally {
+        delete process.env.DATABASE_URL;
+        process.chdir(start);
+        rmSync(folder, { recursive: true, force: true });
+      }
+    },
+  );
+});
 
 describe('db:migrate on SQLite', () => {
   let folder: string;

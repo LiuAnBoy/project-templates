@@ -5,37 +5,25 @@ import {
 } from 'drizzle-orm/better-sqlite3';
 import { z } from 'zod';
 
+import { isDatabasePath } from '../../scripts/db/database-path.mjs';
 import { FixedTextError } from '../common/errors/fixed-text-error.js';
 import { createNestingGuard } from './nesting-guard.js';
 import * as schema from './schema/index.js';
+import { createTransactionEnd } from './transaction-end.js';
 import type { DatabasePort, TransactionRunner } from './types.js';
 
 /**
  * The settings of the database, spread into the environment schema by
  * `src/infra/infra-env.ts`. Required: a missing value stops the boot naming
- * the variable, and the message never carries the value.
+ * the variable, and the message never carries the value. The rule itself lives with
+ * the migration scripts, which share it and run without the build.
  */
 export const databaseEnv = {
   DATABASE_URL: z
     .string()
     .min(1)
-    .refine(isFilePath, 'must be the path of a database file'),
+    .refine(isDatabasePath, 'must be the path of a database file'),
 };
-
-/**
- * Refuses what is not the path of a file: `:memory:`, which the two connections
- * cannot share, and a URI, which is not how this setting names a file.
- *
- * @param value - The raw setting.
- * @returns True for a path.
- */
-function isFilePath(value: string): boolean {
-  return !(
-    value.startsWith(':') ||
-    value.startsWith('file:') ||
-    value.includes('://')
-  );
-}
 
 /** What `createDatabase` reads of the validated environment: the path of the database file. */
 export type DatabaseConfig = { DATABASE_URL: string };
@@ -158,6 +146,62 @@ function createWriteLock(): {
 }
 
 /**
+ * Puts a check in front of the writing connection, for one transaction.
+ *
+ * Every transaction shares this connection, so a statement or the client kept from an
+ * earlier one would otherwise write straight into whichever transaction is open now.
+ * What the driver hands out on the way to a statement is wrapped the same way: functions,
+ * statements (`raw()` returns the statement itself), iterators and the connection a
+ * statement names. Rows are returned as they are.
+ *
+ * @param writer - The writing connection.
+ * @param check - Throws once the transaction has ended.
+ * @returns The connection, as Drizzle and the handle see it.
+ */
+function checkedWriter(
+  writer: BetterSqlite3.Database,
+  check: () => void,
+): BetterSqlite3.Database {
+  const wrapped = new WeakMap<object, object>();
+
+  const isDriverObject = (value: unknown): value is object =>
+    typeof value === 'function' ||
+    value === writer ||
+    (typeof value === 'object' &&
+      value !== null &&
+      ((value as { constructor?: { name?: string } }).constructor?.name ===
+        'Statement' ||
+        typeof (value as { next?: unknown }).next === 'function'));
+
+  const wrap = <T extends object>(target: T): T => {
+    const known = wrapped.get(target);
+    if (known) return known as T;
+    const proxy = new Proxy(target, {
+      get: (object, key) => {
+        check();
+        const value = Reflect.get(object, key, object) as unknown;
+        if (typeof value === 'function')
+          return wrap((value as () => unknown).bind(object));
+        return isDriverObject(value) ? wrap(value) : value;
+      },
+      apply: (fn, _self, args) => {
+        check();
+        const result = Reflect.apply(
+          fn as (...parameters: unknown[]) => unknown,
+          undefined,
+          args,
+        );
+        return isDriverObject(result) ? wrap(result) : result;
+      },
+    });
+    wrapped.set(target, proxy);
+    return proxy;
+  };
+
+  return wrap(writer);
+}
+
+/**
  * Creates the SQLite client, its transaction runner, a probe and a close.
  *
  * It holds two connections. Reads default to one (`db`). `transactions.run` takes
@@ -168,6 +212,11 @@ function createWriteLock(): {
  * refused at once (`createNestingGuard`), because it would wait for a lock its own
  * callback holds and stop every write until a restart: pass the transaction handle
  * down instead.
+ *
+ * Each `run` gives its callback a Drizzle client of its own, on `checkedWriter`, which
+ * refuses every statement once the callback has settled (`createTransactionEnd`). The
+ * commit or the rollback then runs on the connection itself, so a statement kept from
+ * this transaction can never join the next.
  *
  * The files must exist, so this throws, with no path in its message, when the path
  * is wrong. The pragmas are `busy_timeout`, `foreign_keys` and `journal_mode = WAL`.
@@ -195,7 +244,6 @@ export function createDatabase(
   reader.pragma('query_only = ON');
 
   const db: Database = drizzle({ client: reader, schema });
-  const tx: DatabaseTransaction = drizzle({ client: writer, schema });
   const lock = createWriteLock();
   const guard = createNestingGuard('sqlite', 'transaction handle');
 
@@ -203,10 +251,15 @@ export function createDatabase(
     run: (work) =>
       guard.enter(async () => {
         const release = await lock.acquire(writeWaitMs);
+        const end = createTransactionEnd();
         try {
           writer.exec('BEGIN IMMEDIATE');
+          const tx: DatabaseTransaction = drizzle({
+            client: checkedWriter(writer, () => end.check()),
+            schema,
+          });
           try {
-            const result = await work(tx);
+            const result = await end.during(() => work(end.handle(tx)));
             writer.exec('COMMIT');
             return result;
           } catch (error) {
@@ -218,6 +271,7 @@ export function createDatabase(
             throw error;
           }
         } finally {
+          end.finish();
           release();
         }
       }),

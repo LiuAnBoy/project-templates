@@ -9,6 +9,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Protocol
 
+import psycopg
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy import Connection, text
@@ -23,10 +24,28 @@ from sqlalchemy.pool import NullPool
 
 from core.dependency import DependencyClosedError
 from db.nesting_guard import NestingGuard
+from db.session_end import EndingSession, retire_driver_connections, run_in_session
 from db.types import DatabasePort, TransactionRunner
 
 #: Refuses a ``transactions.run`` from inside an open one.
 _GUARD = NestingGuard("postgres")
+
+
+class _Connection(psycopg.AsyncConnection):
+    """A connection whose printed form holds no connection value.
+
+    psycopg's prints the host, the port, the user and the database, and that text reaches
+    the log through the warning SQLAlchemy raises when a session nothing closed is
+    collected.
+    """
+
+    def __repr__(self) -> str:
+        """Name the kind of object and nothing about where it points.
+
+        Returns:
+            Fixed text.
+        """
+        return "<postgres connection>"
 
 
 class DatabaseSettings(BaseSettings):
@@ -134,7 +153,8 @@ class _Runner:
 
         A nested call is refused at once (:class:`~db.nesting_guard.NestingGuard`),
         because it would take a second connection and wait for locks its own caller
-        holds, or exhaust the pool when several requests nest together.
+        holds, or exhaust the pool when several requests nest together. The session ends
+        with the work (:func:`~db.session_end.run_in_session`).
 
         Args:
             work: The unit of work; it receives the session of the transaction.
@@ -148,8 +168,8 @@ class _Runner:
         """
         if self._is_closed():
             raise DependencyClosedError("postgres: the database is closed")
-        async with _GUARD.entered(), self._sessions() as session, session.begin():
-            return await work(session)
+        async with _GUARD.entered():
+            return await run_in_session(self._sessions, work)
 
 
 def create_database(config: DatabaseConfig, options: DatabaseOptions | None = None) -> DatabasePort:
@@ -180,9 +200,13 @@ def create_database(config: DatabaseConfig, options: DatabaseOptions | None = No
         pool_timeout=chosen.pool_wait_seconds,
         pool_pre_ping=True,
         hide_parameters=True,
-        connect_args={"connect_timeout": chosen.connect_timeout_seconds},
+        connect_args={
+            "connect_timeout": chosen.connect_timeout_seconds,
+            "async_creator_fn": _Connection.connect,
+        },
     )
-    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    retire_driver_connections(engine)
+    sessions = async_sessionmaker(engine, class_=EndingSession, expire_on_commit=False)
 
     closed = False
 

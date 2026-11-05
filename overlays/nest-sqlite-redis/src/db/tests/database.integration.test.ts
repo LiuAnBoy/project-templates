@@ -1,6 +1,14 @@
+import type BetterSqlite3 from 'better-sqlite3';
+import { sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-import { createDatabase } from '../database.js';
+import { isDependencyOutage } from '../../common/errors/dependency-failure.js';
+import { describeFailure } from '../../common/errors/failure.js';
+import { createDatabase, type DatabaseTransaction } from '../database.js';
+import {
+  TRANSACTION_ENDED_MESSAGE,
+  TransactionEndedError,
+} from '../transaction-end.js';
 import {
   createProbe,
   testTarget,
@@ -9,6 +17,10 @@ import {
 } from './support.js';
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/** The raw connection Drizzle exposes on a handle, which its types leave out. */
+const clientOf = (tx: DatabaseTransaction) =>
+  (tx as unknown as { $client: BetterSqlite3.Database }).$client;
 
 describe('sqlite database', () => {
   let target: TestTarget;
@@ -114,6 +126,140 @@ describe('sqlite database', () => {
     expect((outcome as { code?: string }).code).toBe('SQLITE_BUSY');
     await database.transactions.run((tx) => probe.insert(tx, 'after-busy'));
     expect(await probe.exists(database.db, 'after-busy')).toBe(true);
+  });
+
+  describe('a handle used after its run ended', () => {
+    /** Runs a transaction that commits, and gives back the handle the work kept. */
+    const keptHandle = async (): Promise<DatabaseTransaction> => {
+      let kept: DatabaseTransaction | undefined;
+      await database.transactions.run((tx) => {
+        kept = tx;
+        return Promise.resolve();
+      });
+      return kept as DatabaseTransaction;
+    };
+
+    it('throws the fixed error, classified as no outage', async () => {
+      const tx = await keptHandle();
+
+      const error = await probe
+        .insert(tx, 'after-commit')
+        .catch((caught: unknown) => caught);
+
+      expect(error).toBeInstanceOf(TransactionEndedError);
+      expect((error as Error).message).toBe(TRANSACTION_ENDED_MESSAGE);
+      expect(isDependencyOutage(error)).toBe(false);
+      expect(JSON.stringify(describeFailure(error))).toContain(
+        TRANSACTION_ENDED_MESSAGE,
+      );
+      expect(await probe.exists(database.db, 'after-commit')).toBe(false);
+    });
+
+    it('reproduces a write after the rollback: it never commits', async () => {
+      let kept: DatabaseTransaction | undefined;
+      await database.transactions
+        .run((tx) => {
+          kept = tx;
+          return Promise.reject(new Error('boom'));
+        })
+        .catch(() => undefined);
+
+      await expect(
+        probe.insert(kept as DatabaseTransaction, 'after-rollback'),
+      ).rejects.toBeInstanceOf(TransactionEndedError);
+
+      expect(await probe.exists(database.db, 'after-rollback')).toBe(false);
+    });
+
+    it('reproduces a kept handle joining another transaction: it is refused and rolls back with nothing', async () => {
+      const stale = await keptHandle();
+      let outcome: unknown;
+
+      await database.transactions
+        .run(async (tx) => {
+          await probe.insert(tx, 'other');
+          outcome = await probe
+            .insert(stale, 'joined')
+            .catch((caught: unknown) => caught);
+          throw new Error('boom');
+        })
+        .catch(() => undefined);
+
+      expect(outcome).toBeInstanceOf(TransactionEndedError);
+      expect(await probe.exists(database.db, 'other')).toBe(false);
+    });
+
+    it('refuses a builder, a prepared statement and the raw client made before the end, on the shared connection', async () => {
+      let built: unknown;
+      let prepared: { all: () => unknown } | undefined;
+      let client: BetterSqlite3.Database | undefined;
+      let statement: BetterSqlite3.Statement | undefined;
+      await database.transactions.run((tx) => {
+        built = tx.select({ one: sql`1` }).from(sql`(select 1) as t`);
+        prepared = tx
+          .select({ one: sql`1` })
+          .from(sql`(select 1) as t`)
+          .prepare();
+        client = clientOf(tx);
+        statement = client.prepare('select 1');
+        return Promise.resolve();
+      });
+
+      await expect(Promise.resolve(built)).rejects.toBeInstanceOf(
+        TransactionEndedError,
+      );
+      expect(() => prepared?.all()).toThrow(TransactionEndedError);
+      expect(() => client?.exec('select 1')).toThrow(TransactionEndedError);
+      expect(() => client?.prepare('select 1')).toThrow(TransactionEndedError);
+      expect(() => statement?.run()).toThrow(TransactionEndedError);
+      expect(() => statement?.database).toThrow(TransactionEndedError);
+    });
+
+    it('gives work still running when the run ends the same error, stored in a repository too', async () => {
+      class Repository {
+        constructor(readonly tx: DatabaseTransaction) {}
+        write(): Promise<void> {
+          return probe.insert(this.tx, 'from-repository');
+        }
+      }
+      let late: Promise<unknown> | undefined;
+
+      await database.transactions.run((tx) => {
+        const repository = new Repository(tx);
+        late = sleep(20)
+          .then(() => repository.write())
+          .catch((caught: unknown) => caught);
+        return Promise.resolve();
+      });
+
+      expect(await late).toBeInstanceOf(TransactionEndedError);
+      expect(await probe.exists(database.db, 'from-repository')).toBe(false);
+    });
+
+    it('lets work started inside open its own transaction after the end', async () => {
+      let late: Promise<void> | undefined;
+
+      await database.transactions.run(() => {
+        late = sleep(20).then(() =>
+          database.transactions.run((tx) => probe.insert(tx, 'timer-after')),
+        );
+        return Promise.resolve();
+      });
+      await late;
+
+      expect(await probe.exists(database.db, 'timer-after')).toBe(true);
+    });
+
+    it('keeps a statement of the open transaction and a row read in it working', async () => {
+      await database.transactions.run(async (tx) => {
+        await probe.insert(tx, 'keep-working');
+        const rows = clientOf(tx).prepare('select 1 as one').raw().all();
+        expect(rows).toEqual([[1]]);
+        expect(clientOf(tx).inTransaction).toBe(true);
+      });
+
+      expect(await probe.exists(database.db, 'keep-working')).toBe(true);
+    });
   });
 
   it('refuses a write through the reading client', async () => {

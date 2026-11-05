@@ -31,6 +31,7 @@ from sqlalchemy.pool import AsyncAdaptedQueuePool, NullPool
 
 from core.dependency import DependencyClosedError
 from db.nesting_guard import NestingGuard
+from db.session_end import EndingSession, retire_driver_connections, run_in_session
 from db.types import DatabasePort, MigrationError, TransactionRunner
 
 # aiosqlite logs every statement together with its bound values at DEBUG, and the
@@ -175,7 +176,9 @@ class _Runner:
         Writers wait for each other for ``write_wait_seconds`` and then fail as a
         busy store. A nested call is refused at once
         (:class:`~db.nesting_guard.NestingGuard`), because it would wait for a connection
-        its own caller holds and stop every write until a restart.
+        its own caller holds and stop every write until a restart. The session ends with
+        the work (:func:`~db.session_end.run_in_session`), so a session kept from it can
+        never take the writer again.
 
         Args:
             work: The unit of work; it receives the session of the transaction.
@@ -189,11 +192,15 @@ class _Runner:
         """
         if self._is_closed():
             raise DependencyClosedError("sqlite: the database is closed")
-        async with _GUARD.entered(), self._sessions() as session, session.begin():
+
+        async def on_the_writer(session: AsyncSession) -> T:
             # A session takes its connection at the first statement; take it now, so the
             # wait for the writer happens before the work starts, not somewhere inside it.
             await session.connection()
             return await work(session)
+
+        async with _GUARD.entered():
+            return await run_in_session(self._sessions, on_the_writer)
 
 
 def create_database(config: DatabaseConfig, options: DatabaseOptions | None = None) -> DatabasePort:
@@ -226,6 +233,8 @@ def create_database(config: DatabaseConfig, options: DatabaseOptions | None = No
     )
     _on_connect(reader, busy_timeout_ms=chosen.busy_timeout_ms, read_only=True)
     _on_connect(writer, busy_timeout_ms=chosen.busy_timeout_ms, read_only=False)
+    retire_driver_connections(reader)
+    retire_driver_connections(writer)
 
     closed = False
 
@@ -242,11 +251,11 @@ def create_database(config: DatabaseConfig, options: DatabaseOptions | None = No
         await reader.dispose()
 
     transactions: TransactionRunner = _Runner(
-        async_sessionmaker(writer, expire_on_commit=False), lambda: closed
+        async_sessionmaker(writer, class_=EndingSession, expire_on_commit=False), lambda: closed
     )
     return DatabasePort(
         name="sqlite",
-        session_factory=async_sessionmaker(reader, expire_on_commit=False),
+        session_factory=async_sessionmaker(reader, class_=EndingSession, expire_on_commit=False),
         transactions=transactions,
         probe=probe,
         close=close,
