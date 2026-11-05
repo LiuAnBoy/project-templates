@@ -1,0 +1,14 @@
+# The whole project in containers, built from the workspace root: the web part(s)
+# and the server, each from the Dockerfile in its own directory, and the services
+# the server needs. Everything reads the .env next to this file.
+# Needs .env: copy .env.example. COMPOSE_PROJECT_NAME and EDGE_SUBNET are filled;
+# change them if the name or the subnet is taken on this machine.
+# Needs a lockfile: run `pnpm install` once before the first build.
+# Start:               docker compose up -d --build --wait
+# Stop:                docker compose down
+# Stop and drop data:  docker compose down -v
+networks:
+  edge:
+    ipam:
+      config:
+        - subnet: ${EDGE_SUBNET:?set EDGE_SUBNET in .env}

@@ -1202,6 +1202,76 @@ test('guard on real output: a web service with env_file, and a final stage with 
   }
 });
 
+test('monorepo root: a web block is instantiated per part, the migrate context is retargeted, and the Docker env lines are split out', async () => {
+  const { instantiateWeb, retargetBuild, splitDockerEnv } = await import(new URL('./docker-blocks.mjs', import.meta.url).href);
+  const block = 'services:\n  __PART__:\n    dockerfile: __PART__/Dockerfile\n    ports:\n      - \'${__PORT_VAR__:-__PORT__}:3000\'\n';
+  assert.match(instantiateWeb(block, 'web'), /^services:\n {2}web:\n[^]*web\/Dockerfile[^]*\$\{WEB_PORT:-3000\}/);
+  assert.match(instantiateWeb(block, 'dashboard'), /^services:\n {2}dashboard:\n[^]*dashboard\/Dockerfile[^]*\$\{DASHBOARD_PORT:-3001\}/);
+  const compose = 'services:\n  server:\n    build: .\n  migrate:\n    # note\n    build: .\n    restart: \'no\'\n';
+  assert.equal(
+    retargetBuild(compose, 'migrate', ['build: server']),
+    'services:\n  server:\n    build: .\n  migrate:\n    # note\n    build: server\n    restart: \'no\'\n',
+  );
+  assert.equal(retargetBuild(compose, 'worker', ['build: x']), compose);
+  const env =
+    'PORT=8000\n# a\nCOMPOSE_PROJECT_NAME=\n\n# the files\n# second line\nCOMPOSE_FILE=docker-compose.yml\n# the network\nX_DOCKER_NETWORK=\nTRUST_PROXY=\n';
+  const split = splitDockerEnv(env, ['# a\nCOMPOSE_PROJECT_NAME=\n']);
+  assert.equal(split.kept, 'PORT=8000\n\nTRUST_PROXY=\n');
+  assert.deepEqual(split.moved, ['# the files', '# second line', 'COMPOSE_FILE=docker-compose.yml', '# the network', 'X_DOCKER_NETWORK=']);
+});
+
+test('guard on real output: source/docker/monorepo obeys the Dockerfile, ignore and web env_file rules, and its root join has one web, one dashboard and the overlay\'s store blocks', async () => {
+  const docker = await import(new URL('./docker-blocks.mjs', import.meta.url).href);
+  const { overlays } = await import(new URL('./recipes.mjs', import.meta.url).href);
+  const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+  const mono = path.join(root, docker.MONOREPO_LAYERS);
+  const problems = [];
+  let seen = 0;
+  for (const layer of fs.readdirSync(mono)) {
+    for (const file of fs.readdirSync(path.join(mono, layer), { withFileTypes: true }).filter((e) => e.isFile()).map((e) => e.name)) {
+      const rel = `${docker.MONOREPO_LAYERS}/${layer}/${file}`;
+      const text = fs.readFileSync(path.join(mono, layer, file), 'utf8');
+      if (file === 'Dockerfile') {
+        seen += 1;
+        problems.push(...docker.checkBuildArgs(text, rel), ...docker.checkFinalUser(text, rel));
+        problems.push(...docker.checkNodeMajor(text, fs.readFileSync(path.join(root, 'source/workspace/.nvmrc'), 'utf8'), rel));
+      } else if (file === 'compose.app.fragment.yml') {
+        seen += 1;
+        problems.push(...docker.checkBuildArgs(text, rel), ...docker.checkWebEnvFile(text, rel));
+      } else if (file === '.dockerignore') {
+        seen += 1;
+        problems.push(...docker.checkDockerignore(text, rel));
+      }
+    }
+  }
+  assert.deepEqual(problems, []);
+  assert.ok(seen >= 8, `the scan found ${seen} monorepo Docker files, expected at least 8`);
+  const ignore = fs.readFileSync(path.join(mono, 'main/.dockerignore'), 'utf8');
+  assert.equal(docker.checkDockerignore(ignore.replace('**/.env\n', ''), 'root').length, 1);
+  const tmp = fs.mkdtempSync(path.join(base, 'root-join-'));
+  const layers = ['web', 'dashboard'].map((part) => {
+    const dir = path.join(tmp, part);
+    fs.mkdirSync(dir);
+    fs.writeFileSync(path.join(dir, 'compose.app.fragment.yml'), docker.instantiateWeb(fs.readFileSync(path.join(mono, 'web-next/compose.app.fragment.yml'), 'utf8'), part));
+    return dir;
+  });
+  const data = overlays['nest-postgres-redis'].layers.map((layer) => path.join(root, layer));
+  const compose = docker.buildRootCompose([path.join(mono, 'main'), ...layers, path.join(mono, 'server-node'), ...data], 'node');
+  const names = [...compose.split(/^volumes:/m)[0].matchAll(/^ {2}([a-z]+):$/gm)].map((m) => m[1]);
+  assert.deepEqual(names.sort(), ['dashboard', 'migrate', 'postgres', 'redis', 'server', 'web']);
+  assert.deepEqual(docker.checkWebEnvFile(compose, 'root'), []);
+  assert.deepEqual(docker.checkOneServices(compose, 'root'), []);
+  assert.deepEqual(docker.checkOneName(compose, 'root'), []);
+  assert.deepEqual(docker.checkBuildArgs(compose, 'root'), []);
+  assert.match(compose, /migrate:[^]*dockerfile: server\/Dockerfile/);
+  const overlay = fs.readFileSync(path.join(root, 'overlays/nest-postgres-redis/docker-compose.yml'), 'utf8');
+  for (const store of ['postgres', 'redis']) {
+    const block = (text) => new RegExp(`^ {2}${store}:\\n(?: {4}.*\\n|\\n| {6}.*\\n)*`, 'm').exec(text)?.[0];
+    assert.ok(block(overlay), `${store} is in the overlay`);
+    assert.equal(block(compose), block(overlay), `${store} block differs from the overlay's`);
+  }
+});
+
 let failed = 0;
 for (const [name, fn] of tests) {
   try {

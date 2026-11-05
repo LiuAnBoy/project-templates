@@ -1,0 +1,21 @@
+services:
+  server:
+    build: server
+    env_file: .env
+    environment:
+      HOST: 0.0.0.0
+      PORT: '8000'
+      TRUST_PROXY: ${TRUST_PROXY:?set TRUST_PROXY in .env}
+    networks:
+      - default
+      - edge
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request as u; u.urlopen('http://127.0.0.1:8000/api/health', timeout=3)
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 10s

@@ -1,0 +1,24 @@
+services:
+  __PART__:
+    build:
+      context: .
+      dockerfile: __PART__/Dockerfile
+      args:
+        PART: __PART__
+        API_HOST: http://server:8000
+    environment:
+      API_HOST: http://server:8000
+    networks:
+      - edge
+    ports:
+      - '127.0.0.1:${__PORT_VAR__:-__PORT__}:3000'
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - fetch('http://127.0.0.1:3000/').then((r) => process.exit(Number(r.status !== 200)), () => process.exit(1))
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 10s

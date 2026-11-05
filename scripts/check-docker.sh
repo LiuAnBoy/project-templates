@@ -58,8 +58,20 @@
 #      every other file keeps its checksum; `up --wait` passes with no local
 #      `postgres` container, health and hello pass, and `migrate`'s table is in
 #      the throwaway database; restoring .env brings the local service back.
+#   8. Proxy trust (a project with the `edge` network, the composed form): `server`
+#      publishes no port. With RATE_LIMIT_MAX=3, through each web part one
+#      forged visitor gets 200 200 200 429 and a second one 200, and a peer on
+#      the project's default network, off `edge`, forging a new address with every
+#      request still gets 429 on its fourth.
+# A composed project (a directory with `server/`, a root `docker-compose.yml` and
+# no root `Dockerfile`, as monorepo.sh writes it) is checked the same way, in
+# a temp copy at its root: its lockfile is written there with
+# `pnpm install --lockfile-only`; `.env` is the root `.env`, and each part gets a
+# `.env`, `todos/` and `node_modules/` sentinel of its own; hello is read through
+# each web port (`WEB_PORT`, `DASHBOARD_PORT`); every service that has a
+# Dockerfile gets the image guards and its build stage is scanned.
 # A trap runs `down -v --rmi local` for the project, removes the build-stage
-# image, the throwaway container and the throwaway network by name and stops the
+# images, the throwaway container and the throwaway network by name and stops the
 # stub, and nothing else.
 #
 # What the script assumes of a project (the contract its files meet):
@@ -70,6 +82,10 @@
 #     GET /api/health on its own port 8000, or no `server` and a service `web`
 #     that answers GET / and publishes `WEB_PORT`; it names no `container_name`.
 #   - A web service reads no `env_file`.
+#   - A composed project's root `.env.example` holds the name (filled), `EDGE_SUBNET`
+#     and `TRUST_PROXY`, `WEB_PORT` (and `DASHBOARD_PORT`), and the server's lines;
+#     its Dockerfiles take the build argument `PART` and have their context at the root,
+#     except a FastAPI server's, whose context is `server/`.
 #   - A project with a database store has a `migrate` service (the server's image
 #     with its own command) that `server` waits on, and either a `postgres` or
 #     `mysql` service whose URL compose builds for `server` and `migrate`, or a
@@ -84,7 +100,8 @@
 # Exit codes: 0 every target ran and passed; 1 a target failed; 2 usage; 3 Docker
 # is absent or its daemon does not answer, so the check is incomplete and never a
 # pass (a failure of another target still makes the exit 1).
-# Needs node on the PATH when the project is a Vite web base (the stub).
+# Needs node on the PATH when the project is a Vite web base (the stub), and pnpm for a
+# composed project.
 # Environment: BUILD_BOUND (seconds for a build, default 900), UP_BOUND (seconds
 # for `up --wait`, default 300), STORE_BOUND (seconds a server gets to exit with a
 # store down, default 30), DOCKER_BOUND (seconds for any other Docker command,
@@ -114,10 +131,12 @@ LABEL=""
 SENTINEL=""
 STARTED=0
 COUNTER=0
-BUILD_IMAGE=""
+BUILD_IMAGES=""
 STUB_PID=""
 SW_NET=""
 SW_PG=""
+COMPOSED=0
+SERVER_DIR=""
 
 # kill_tree <signal> <pid>: send a signal to a process and all its descendants.
 kill_tree() {
@@ -215,16 +234,16 @@ env_value() {
 
 # teardown: remove everything the current target started, by name.
 teardown() {
-  local leftover
+  local leftover image
   if [ -n "$WORK" ] && [ -d "$WORK" ]; then
     if [ "$STARTED" -eq 1 ] && [ -d "$PROJ" ]; then
       # A run that stopped inside the switch still has the cluster .env: restore the local one first.
       [ -f "$WORK/env.local" ] && cp "$WORK/env.local" "$PROJ/.env"
       (cd "$PROJ" && run_bound "$DOCKER_BOUND" docker compose -p "$PROJECT" down -v --rmi local >/dev/null 2>&1)
     fi
-    if [ -n "$BUILD_IMAGE" ]; then
-      run_bound "$DOCKER_BOUND" docker rmi -f "$BUILD_IMAGE" >/dev/null 2>&1
-    fi
+    for image in $BUILD_IMAGES; do
+      run_bound "$DOCKER_BOUND" docker rmi -f "$image" >/dev/null 2>&1
+    done
     if [ "$STARTED" -eq 1 ]; then
       # `down --rmi local` removes nothing once the project has no container (the
       # run stopped it before a failure), so its images and network go by their label.
@@ -250,7 +269,9 @@ teardown() {
   WORK=""
   PROJ=""
   STARTED=0
-  BUILD_IMAGE=""
+  BUILD_IMAGES=""
+  COMPOSED=0
+  SERVER_DIR=""
   STUB_PID=""
   SW_NET=""
   SW_PG=""
@@ -296,8 +317,16 @@ resolve_target() {
   fi
 }
 
+# plant_sentinels <dir>: put the sentinel in todos/ and node_modules/ of a directory of the context.
+plant_sentinels() {
+  mkdir -p "$1/todos" "$1/node_modules"
+  printf '%s\n' "$SENTINEL" >"$1/todos/ptcheck-sentinel.txt"
+  printf '%s\n' "$SENTINEL" >"$1/node_modules/ptcheck-sentinel.txt"
+}
+
 # write_env: write .env from .env.example with the ports moved and the sentinel planted.
 write_env() {
+  local part
   [ -f "$PROJ/.env.example" ] || { fail ".env.example is missing"; return 1; }
   awk -v shift="$PORT_SHIFT" '
     /^[A-Za-z0-9_]*PORT=[0-9]+$/ { split($0, kv, "="); print kv[1] "=" (kv[2] + shift); next }
@@ -310,9 +339,15 @@ write_env() {
     { print }
   ' "$PROJ/.env.example" >"$PROJ/.env" || return 1
   printf 'SENTINEL_SECRET=%s\n' "$SENTINEL" >>"$PROJ/.env"
-  mkdir -p "$PROJ/todos" "$PROJ/node_modules"
-  printf '%s\n' "$SENTINEL" >"$PROJ/todos/ptcheck-sentinel.txt"
-  printf '%s\n' "$SENTINEL" >"$PROJ/node_modules/ptcheck-sentinel.txt"
+  plant_sentinels "$PROJ"
+  if [ "$COMPOSED" -eq 1 ]; then
+    # The printed next steps create server/.env, and a developer may create one per part.
+    for part in web dashboard server; do
+      [ -d "$PROJ/$part" ] || continue
+      printf 'SENTINEL_SECRET=%s\n' "$SENTINEL" >"$PROJ/$part/.env"
+      plant_sentinels "$PROJ/$part"
+    done
+  fi
   # Unique store names, so a leak of the user or the database name is recognisable.
   if grep -q '^POSTGRES_USER=' "$PROJ/.env"; then
     set_env POSTGRES_USER "ptu${RANDOM}x"
@@ -338,17 +373,17 @@ set_env() {
 # so what `migrate` did can be read back. Node: drizzle/ and its journal; Python:
 # alembic/versions/. A project with neither has no migrate service.
 plant_migration() {
-  if [ -f "$PROJ/scripts/db/migrate.mjs" ] && [ -f "$PROJ/drizzle/meta/_journal.json" ]; then
-    printf 'CREATE TABLE ptcheck_probe (id integer);\n' >"$PROJ/drizzle/0000_ptcheck_probe.sql"
+  if [ -f "$SERVER_DIR/scripts/db/migrate.mjs" ] && [ -f "$SERVER_DIR/drizzle/meta/_journal.json" ]; then
+    printf 'CREATE TABLE ptcheck_probe (id integer);\n' >"$SERVER_DIR/drizzle/0000_ptcheck_probe.sql"
     node -e "
       const fs = require('fs');
       const file = process.argv[1];
       const journal = JSON.parse(fs.readFileSync(file, 'utf8'));
       journal.entries.push({ idx: 0, version: journal.version, when: 1730000000000, tag: '0000_ptcheck_probe', breakpoints: true });
       fs.writeFileSync(file, JSON.stringify(journal, null, 2) + '\n');
-    " "$PROJ/drizzle/meta/_journal.json" || return 1
-  elif [ -f "$PROJ/scripts/db_migrate.py" ] && [ -d "$PROJ/alembic/versions" ]; then
-    cat >"$PROJ/alembic/versions/20250101_0000_ptcheck0001_probe.py" <<'PYMIG'
+    " "$SERVER_DIR/drizzle/meta/_journal.json" || return 1
+  elif [ -f "$SERVER_DIR/scripts/db_migrate.py" ] && [ -d "$SERVER_DIR/alembic/versions" ]; then
+    cat >"$SERVER_DIR/alembic/versions/20250101_0000_ptcheck0001_probe.py" <<'PYMIG'
 """Probe migration planted by check-docker.sh."""
 
 import sqlalchemy as sa
@@ -381,6 +416,9 @@ set_project_name() {
 check_blank_name() {
   local out
   out="$WORK/blank.out"
+  # A composed project's example holds the name, filled in; the check blanks it first.
+  set_env COMPOSE_PROJECT_NAME ''
+  [ -z "$(env_value "$PROJ/.env" COMPOSE_PROJECT_NAME)" ] || { fail "could not blank COMPOSE_PROJECT_NAME"; return 1; }
   if dc "$DOCKER_BOUND" config -q >"$out" 2>&1; then
     fail "docker compose accepted a blank COMPOSE_PROJECT_NAME"
     return 1
@@ -396,7 +434,7 @@ check_blank_name() {
 
 # is_python: succeed for a Python project.
 is_python() {
-  [ -f "$PROJ/pyproject.toml" ]
+  [ -f "$SERVER_DIR/pyproject.toml" ]
 }
 
 # has_service <name>: succeed when docker-compose.yml defines the service.
@@ -441,7 +479,7 @@ check_healthy() {
 
 # check_running: health inside server, every service healthy, hello through the port.
 check_running() {
-  local body port hello
+  local body port hello svc var
   body="$(read_health 2>/dev/null)"
   if [ "$body" != "$HEALTH_BODY" ]; then
     fail "/api/health from inside server answered '$body', expected '$HEALTH_BODY'"
@@ -449,6 +487,21 @@ check_running() {
   fi
   say "$LABEL: /api/health answers exactly $HEALTH_BODY from inside server"
   check_healthy || return 1
+  if has_service web; then
+    # A composed project publishes no server port: hello goes through each web part.
+    for svc in web dashboard; do
+      has_service "$svc" || continue
+      if [ "$svc" = web ]; then var=WEB_PORT; else var=DASHBOARD_PORT; fi
+      port="$(env_value "$PROJ/.env" "$var")"
+      hello="$(curl -s --max-time 10 "http://127.0.0.1:$port/api/v1/hello")"
+      if [ "$hello" != "$HELLO_BODY" ]; then
+        fail "hello through $svc port $port answered '$hello'"
+        return 1
+      fi
+      say "$LABEL: hello answers through the published $svc port $port"
+    done
+    return 0
+  fi
   port="$(env_value "$PROJ/.env" PORT)"
   hello="$(curl -s --max-time 10 "http://127.0.0.1:$port/api/v1/hello")"
   if [ "$hello" != "$HELLO_BODY" ]; then
@@ -617,7 +670,7 @@ scan_export() {
     fail "a planted context file is in the filesystem of $what"
     return 1
   fi
-  if grep -E -q '(^|/)(app|workspace)/(\.env|todos)(/|$)' "$listing"; then
+  if grep -E -q '(^|/)(app|workspace)/((web|dashboard|server|contract)/)?(\.env|todos)(/|$)' "$listing"; then
     fail ".env or todos/ is in the filesystem of $what"
     return 1
   fi
@@ -662,23 +715,65 @@ check_image() {
   scan_export "the $svc container" "$id" || return 1
 }
 
-# check_build_stage: build the stage named `build` of the Dockerfile and scan it,
-# because `COPY . .` puts the whole context there.
+# check_images: the guards of every image the project built.
+check_images() {
+  local svc
+  for svc in server web dashboard; do
+    has_service "$svc" || continue
+    check_image "$svc" || return 1
+  done
+}
+
+# check_build_stage: build the stage named `build` of each Dockerfile and scan it,
+# because `COPY . .` puts the whole context there. A composed project has one per
+# part, built from the root with PART (a FastAPI server from server/).
 check_build_stage() {
-  local cid rc
-  grep -E -q '^FROM .* AS build[[:space:]]*$' "$PROJ/Dockerfile" 2>/dev/null || return 0
-  BUILD_IMAGE="$PROJECT-buildstage"
-  if ! run_bound "$BUILD_BOUND" docker build --target build -t "$BUILD_IMAGE" "$PROJ" >"$WORK/stage.out" 2>&1; then
-    tail -n 20 "$WORK/stage.out" >&2
-    fail "could not build the build stage"
-    return 1
+  local part dockerfile context cid rc image args
+  for part in $(build_parts); do
+    args=""
+    if [ "$part" = . ]; then
+      dockerfile="$PROJ/Dockerfile"
+      context="$PROJ"
+      image="$PROJECT-buildstage"
+    elif is_python && [ "$part" = server ]; then
+      dockerfile="$PROJ/server/Dockerfile"
+      context="$PROJ/server"
+      image="$PROJECT-buildstage-$part"
+    else
+      dockerfile="$PROJ/$part/Dockerfile"
+      context="$PROJ"
+      image="$PROJECT-buildstage-$part"
+      args="--build-arg PART=$part"
+    fi
+    grep -E -q '^FROM .* AS build[[:space:]]*$' "$dockerfile" 2>/dev/null || continue
+    BUILD_IMAGES="$BUILD_IMAGES $image"
+    # shellcheck disable=SC2086
+    if ! run_bound "$BUILD_BOUND" docker build --target build -f "$dockerfile" $args -t "$image" "$context" >"$WORK/stage.out" 2>&1; then
+      tail -n 20 "$WORK/stage.out" >&2
+      fail "could not build the build stage of $part"
+      return 1
+    fi
+    cid="$(dk "$DOCKER_BOUND" create "$image" 2>/dev/null)"
+    [ -n "$cid" ] || { fail "could not create a container of the build stage"; return 1; }
+    scan_export "the build stage of $part" "$cid"
+    rc=$?
+    dk "$DOCKER_BOUND" rm -f "$cid" >/dev/null 2>&1
+    [ "$rc" -eq 0 ] || return "$rc"
+  done
+}
+
+# build_parts: the directories whose Dockerfile has a build stage: `.` for a single
+# project, the parts of a composed one.
+build_parts() {
+  local part
+  if [ "$COMPOSED" -eq 0 ]; then
+    echo .
+    return 0
   fi
-  cid="$(dk "$DOCKER_BOUND" create "$BUILD_IMAGE" 2>/dev/null)"
-  [ -n "$cid" ] || { fail "could not create a container of the build stage"; return 1; }
-  scan_export "the build stage" "$cid"
-  rc=$?
-  dk "$DOCKER_BOUND" rm -f "$cid" >/dev/null 2>&1
-  return "$rc"
+  for part in web dashboard server; do
+    [ -d "$PROJ/$part" ] && echo "$part"
+  done
+  return 0
 }
 
 # check_runtime_env: the server sees the sentinel; web and dashboard do not.
@@ -928,6 +1023,95 @@ check_migrate_failure() {
   set_env "$pwname" "$password"
 }
 
+# forged_statuses <address-prefix> <count>: run <count> requests from a container on the
+# project's default network, which is not `edge`, each forging a new X-Forwarded-For, and
+# print the statuses.
+forged_statuses() {
+  if is_python; then
+    run_bound "$DOCKER_BOUND" docker run --rm --network "${PROJECT}_default" --entrypoint python "$PROJECT-server" -c "
+import urllib.request as u, urllib.error as e
+out = []
+for i in range($2):
+    r = u.Request('http://server:8000/api/v1/hello', headers={'X-Forwarded-For': '$1.' + str(i + 1)})
+    try:
+        out.append(u.urlopen(r, timeout=5).status)
+    except e.HTTPError as err:
+        out.append(err.code)
+print(*out)
+"
+  else
+    run_bound "$DOCKER_BOUND" docker run --rm --network "${PROJECT}_default" --entrypoint node "$PROJECT-server" -e "
+(async () => {
+  const out = [];
+  for (let i = 0; i < $2; i += 1) {
+    const r = await fetch('http://server:8000/api/v1/hello', { headers: { 'x-forwarded-for': '$1.' + (i + 1) } });
+    out.push(r.status);
+  }
+  console.log(out.join(' '));
+})();
+"
+  fi
+}
+
+# visitor_statuses <port> <address> <count>: print the statuses of <count> requests through a
+# web port, each carrying X-Forwarded-For: <address>.
+visitor_statuses() {
+  local i out
+  out=""
+  i=0
+  while [ "$i" -lt "$3" ]; do
+    out="$out $(curl -s -o /dev/null --max-time 10 -w '%{http_code}' -H "X-Forwarded-For: $2" "http://127.0.0.1:$1/api/v1/hello")"
+    i=$((i + 1))
+  done
+  echo "${out# }"
+}
+
+# check_proxy_trust: the edge network decides whose X-Forwarded-For the server believes.
+check_proxy_trust() {
+  local svc var port n limit published statuses
+  grep -q '^  edge:' "$PROJ/docker-compose.yml" || return 0
+  published="$(dk "$DOCKER_BOUND" inspect -f '{{range $p, $b := .NetworkSettings.Ports}}{{if $b}}{{$p}} {{end}}{{end}}' \
+    "$(dc "$DOCKER_BOUND" ps -q server)" 2>/dev/null)"
+  if [ "$?" -ne 0 ] || [ -n "$(echo "$published" | tr -d '[:space:]')" ]; then
+    fail "server publishes a port ('$published'), but only the web parts may be reached from the host"
+    return 1
+  fi
+  say "$LABEL: server publishes no port"
+  limit="$(env_value "$PROJ/.env" RATE_LIMIT_MAX)"
+  set_env RATE_LIMIT_MAX 3
+  if ! dc "$UP_BOUND" up -d --wait --force-recreate --no-deps server >"$WORK/proxy.out" 2>&1; then
+    tail -n 20 "$WORK/proxy.out" >&2
+    fail "could not recreate server with RATE_LIMIT_MAX=3"
+    return 1
+  fi
+  n=0
+  for svc in web dashboard; do
+    has_service "$svc" || continue
+    if [ "$svc" = web ]; then var=WEB_PORT; else var=DASHBOARD_PORT; fi
+    port="$(env_value "$PROJ/.env" "$var")"
+    statuses="$(visitor_statuses "$port" "203.0.113.$((10 + n * 2))" 4)"
+    if [ "$statuses" != "200 200 200 429" ]; then
+      fail "one visitor through $svc got '$statuses', expected '200 200 200 429'"
+      return 1
+    fi
+    statuses="$(visitor_statuses "$port" "203.0.113.$((11 + n * 2))" 1)"
+    if [ "$statuses" != "200" ]; then
+      fail "a second visitor through $svc got '$statuses', expected '200': the buckets are not separate"
+      return 1
+    fi
+    say "$LABEL: through $svc, two forged visitors get separate rate-limit buckets"
+    n=$((n + 1))
+  done
+  statuses="$(forged_statuses 198.51.100 4)" || { fail "could not run the peer off edge"; return 1; }
+  if [ "$(echo "$statuses" | tr -d '\r')" != "200 200 200 429" ]; then
+    fail "a peer off edge forging a new address per request got '$statuses', expected '200 200 200 429'"
+    return 1
+  fi
+  say "$LABEL: a peer off edge is not believed (429 on its fourth request)"
+  set_env RATE_LIMIT_MAX "$limit"
+  dc "$UP_BOUND" up -d --wait --force-recreate --no-deps server >"$WORK/proxy.out" 2>&1 || { fail "could not recreate server after the proxy check"; return 1; }
+}
+
 # switch_wait_ready: wait until the throwaway PostgreSQL answers over TCP (the
 # temporary server of the image's first start listens on a socket only).
 switch_wait_ready() {
@@ -1053,13 +1237,28 @@ check_one() {
     teardown
     return 3
   fi
-  for need in Dockerfile docker-compose.yml .dockerignore; do
+  COMPOSED=0
+  SERVER_DIR="$PROJ"
+  if [ -d "$PROJ/server" ] && [ -f "$PROJ/docker-compose.yml" ] && [ ! -f "$PROJ/Dockerfile" ]; then
+    COMPOSED=1
+    SERVER_DIR="$PROJ/server"
+  fi
+  for need in $( [ "$COMPOSED" -eq 1 ] && echo "server/Dockerfile web/Dockerfile docker-compose.yml .dockerignore" || echo "Dockerfile docker-compose.yml .dockerignore" ); do
     if [ ! -f "$PROJ/$need" ]; then
       fail "$need is missing"
       teardown
       return 1
     fi
   done
+  if [ "$COMPOSED" -eq 1 ] && [ ! -f "$PROJ/pnpm-lock.yaml" ]; then
+    # The image installs from the lockfile, which the printed `pnpm install` writes.
+    if ! (cd "$PROJ" && run_bound "$BUILD_BOUND" pnpm install --lockfile-only >"$WORK/lock.out" 2>&1); then
+      tail -n 20 "$WORK/lock.out" >&2
+      fail "pnpm install --lockfile-only failed in the composed project"
+      teardown
+      return 1
+    fi
+  fi
   PROJECT="ptdk$$x${COUNTER}x${RANDOM}"
   SENTINEL="ptcheck-secret-$$-${RANDOM}${RANDOM}"
   echo "=== $LABEL"
@@ -1082,8 +1281,8 @@ check_one() {
         fail "docker compose up --wait failed"
       elif has_service server; then
         if check_running && check_startup_failure && check_runtime_env &&
-          check_image server && check_build_stage && check_store_env && check_migrated &&
-          check_stores_down && check_switch && check_migrate_failure; then
+          check_images && check_build_stage && check_store_env && check_migrated &&
+          check_proxy_trust && check_stores_down && check_switch && check_migrate_failure; then
           rc=0
         fi
       elif has_service web; then

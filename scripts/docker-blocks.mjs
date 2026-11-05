@@ -29,7 +29,9 @@
  * contributions.
  */
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 export const COMPOSE_FRAGMENT = 'compose.fragment.yml';
 export const COMPOSE_APP_FRAGMENT = 'compose.app.fragment.yml';
@@ -850,4 +852,285 @@ export function serverStoresMissingFragment(root, traits) {
   return Object.entries(traits)
     .filter(([store, trait]) => trait.server && !has(path.join(root, 'source/data', store)))
     .map(([store]) => store);
+}
+
+/** The layers `monorepo.sh` joins into the root of a composed project. */
+export const MONOREPO_LAYERS = 'source/docker/monorepo';
+
+/** The Docker lines that name a compose file or a docker network, wherever a layer puts them. */
+const MOVED_ENV_LINE = /^(COMPOSE_FILE|[A-Z0-9_]+_DOCKER_NETWORK)=/;
+
+/** The files a standalone part ships for Docker, besides its dev compose file. */
+const PART_DOCKER_FILES = ['Dockerfile', 'docker-compose.yml', '.dockerignore'];
+
+/**
+ * Instantiate a web block for one part of a composed project.
+ *
+ * @param {string} text A monorepo web block with `__PART__`, `__PORT_VAR__` and `__PORT__`.
+ * @param {'web' | 'dashboard'} part The part's directory and service name.
+ * @returns {string} The block for that part: the dashboard has its own port variable.
+ */
+export function instantiateWeb(text, part) {
+  const dashboard = part === 'dashboard';
+  return text
+    .replaceAll('__PART__', part)
+    .replaceAll('__PORT_VAR__', dashboard ? 'DASHBOARD_PORT' : 'WEB_PORT')
+    .replaceAll('__PORT__', dashboard ? '3001' : '3000');
+}
+
+/**
+ * Replace the `build: .` of one service of a joined compose file.
+ *
+ * @param {string} compose The joined compose file.
+ * @param {string} service The service whose build context is retargeted.
+ * @param {string[]} buildLines The lines that replace the key, written at the service's key indent.
+ * @returns {string} The compose file; unchanged when the service has no `build: .`.
+ */
+export function retargetBuild(compose, service, buildLines) {
+  const lines = compose.split('\n');
+  const start = lines.findIndex((line) => line === `  ${service}:`);
+  if (start === -1) return compose;
+  for (let i = start + 1; i < lines.length; i += 1) {
+    if (/^ {0,2}\S/.test(lines[i]) && !lines[i].startsWith('#')) break;
+    if (lines[i] === '    build: .') {
+      lines.splice(i, 1, ...buildLines.map((line) => `    ${line}`));
+      break;
+    }
+  }
+  return lines.join('\n');
+}
+
+/**
+ * Collapse blank runs, trim the edges and end the text with one newline.
+ *
+ * @param {string[]} lines Lines of a dotenv file.
+ * @returns {string} The tidy text.
+ */
+function tidyEnv(lines) {
+  const out = [];
+  for (const line of lines) {
+    if (line.trim() === '' && (out.length === 0 || out[out.length - 1] === '')) continue;
+    out.push(line);
+  }
+  while (out.length > 0 && out[out.length - 1] === '') out.pop();
+  return `${out.join('\n')}\n`;
+}
+
+/**
+ * Take lines out of a dotenv file together with the comment block directly above each.
+ *
+ * @param {string[]} lines Lines of a dotenv file.
+ * @param {(line: string) => boolean} matches True for a line to take.
+ * @returns {{kept: string[], taken: string[]}} The rest, and what was taken in order.
+ */
+function takeEnvLines(lines, matches) {
+  const take = new Set();
+  lines.forEach((line, i) => {
+    if (!matches(line)) return;
+    take.add(i);
+    for (let j = i - 1; j >= 0 && lines[j].startsWith('#'); j -= 1) take.add(j);
+  });
+  return { kept: lines.filter((_, i) => !take.has(i)), taken: lines.filter((_, i) => take.has(i)) };
+}
+
+/**
+ * Split the Docker lines out of a part's `.env.example`.
+ *
+ * Every line of the `env.fragment` files of `source/docker/` goes (they are the
+ * standalone project's name, API host and web port), and so does `COMPOSE_FILE`
+ * and any `*_DOCKER_NETWORK` line with the comment directly above it, found by
+ * those names so no store's name enters the code.
+ *
+ * @param {string} text The part's `.env.example`.
+ * @param {string[]} fragments The texts of the `env.fragment` files under `source/docker/`.
+ * @returns {{kept: string, moved: string[]}} The file without those lines, and the
+ *   comment and `COMPOSE_FILE` / network lines to keep beside the root compose file.
+ */
+export function splitDockerEnv(text, fragments) {
+  const own = new Set(fragments.flatMap((fragment) => fragment.split('\n')).filter((line) => line.trim() !== ''));
+  const lines = text.split('\n').filter((line) => !own.has(line));
+  const { kept, taken } = takeEnvLines(lines, (line) => MOVED_ENV_LINE.test(line));
+  return { kept: tidyEnv(kept), moved: taken };
+}
+
+/**
+ * Join the compose blocks of a composed project's root.
+ *
+ * @param {string[]} layerDirs The monorepo main block, the web blocks, the server
+ *   block, then the data overlay's own layers.
+ * @param {'node' | 'fastapi'} platform The server's platform: it decides how `migrate` reaches the
+ *   server's Dockerfile, because `migrate` builds the server's image.
+ * @returns {string} The root `docker-compose.yml`.
+ * @throws {Error} On the failures of `buildAppCompose`, or when no layer defines a block.
+ */
+export function buildRootCompose(layerDirs, platform) {
+  const compose = buildAppCompose(layerDirs);
+  if (compose === null) throw new Error('the root compose file has no block');
+  const build = platform === 'fastapi' ? ['build: server'] : ['build:', '  context: .', '  dockerfile: server/Dockerfile'];
+  return retargetBuild(compose, 'migrate', build);
+}
+
+/**
+ * Read a file of the monorepo layers.
+ *
+ * @param {string} srcRoot Repository root (or an extracted archive).
+ * @param {string} rel Path under `source/docker/monorepo`.
+ * @returns {string} The file's text.
+ */
+function readMonorepo(srcRoot, rel) {
+  return fs.readFileSync(path.join(srcRoot, MONOREPO_LAYERS, rel), 'utf8');
+}
+
+/**
+ * Compose the Docker side of a project `monorepo.sh` has just composed.
+ *
+ * With `docker` false (`--no-docker`) it deletes each part's `Dockerfile`,
+ * `docker-compose.yml` and `.dockerignore` and any cluster compose file, and
+ * takes the Docker lines out of each part's `.env.example`; nothing is written
+ * at the root. Otherwise it writes the root `docker-compose.yml`, `.dockerignore`
+ * and `.env.example`, each part's monorepo Dockerfile (a FastAPI server keeps its
+ * own, whose context is `server/`), and moves a cluster compose file to the root.
+ *
+ * @param {object} options
+ * @param {string} options.srcRoot Repository root or an extracted archive holding `source/`.
+ * @param {string} options.projectRoot The composed project.
+ * @param {string} options.web Framework of `web/`.
+ * @param {string} [options.dashboard] Framework of `dashboard/`, when there is one.
+ * @param {string} options.server `nest`, `fastify` or `fastapi`.
+ * @param {string[]} options.dataLayers The data overlay's own layers, relative to `srcRoot`.
+ * @param {string} options.name The compose project name.
+ * @param {string} options.edgeSubnet The CIDR of the `edge` network.
+ * @param {boolean} options.docker False for `--no-docker`.
+ * @returns {void}
+ */
+export function composeMonorepoDocker(options) {
+  const { srcRoot, projectRoot, web, dashboard, server, dataLayers, name, edgeSubnet, docker } = options;
+  const parts = ['web', ...(dashboard ? ['dashboard'] : []), 'server'];
+  const python = server === 'fastapi';
+  const dockerDir = path.join(srcRoot, 'source/docker');
+  const fragments = fs
+    .readdirSync(dockerDir, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory() && fs.existsSync(path.join(dockerDir, entry.name, 'env.fragment')))
+    .map((entry) => fs.readFileSync(path.join(dockerDir, entry.name, 'env.fragment'), 'utf8'));
+  const at = (...segments) => path.join(projectRoot, ...segments);
+
+  const moved = [];
+  const kept = {};
+  for (const part of parts) {
+    const file = at(part, '.env.example');
+    if (!fs.existsSync(file)) continue;
+    const split = splitDockerEnv(fs.readFileSync(file, 'utf8'), fragments);
+    fs.writeFileSync(file, split.kept);
+    kept[part] = split.kept;
+    if (part === 'server') moved.push(...split.moved);
+  }
+  for (const part of parts) {
+    // A Dockerfile is rewritten below, except a FastAPI server's, whose context is server/.
+    const own = docker && python && part === 'server';
+    for (const rel of PART_DOCKER_FILES) {
+      if (docker && rel === 'Dockerfile') continue;
+      if (own && rel === '.dockerignore') continue;
+      fs.rmSync(at(part, rel), { force: true });
+    }
+  }
+  const cluster = fs.existsSync(at('server')) ? fs.readdirSync(at('server')).filter((f) => /^docker-compose\..*-cluster\.yml$/.test(f)) : [];
+  if (!docker) {
+    for (const file of cluster) fs.rmSync(at('server', file), { force: true });
+    return;
+  }
+  for (const file of cluster) fs.renameSync(at('server', file), at(file));
+
+  const dataDirs = dataLayers.map((layer) => path.join(srcRoot, layer));
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'monorepo-docker-'));
+  try {
+    const webLayers = [['web', web], ...(dashboard ? [['dashboard', dashboard]] : [])].map(([part, framework]) => {
+      const dir = path.join(temp, part);
+      fs.mkdirSync(dir);
+      fs.writeFileSync(path.join(dir, COMPOSE_APP_FRAGMENT), instantiateWeb(readMonorepo(srcRoot, `web-${framework}/${COMPOSE_APP_FRAGMENT}`), part));
+      return dir;
+    });
+    const layerDirs = [
+      path.join(srcRoot, MONOREPO_LAYERS, 'main'),
+      ...webLayers,
+      path.join(srcRoot, MONOREPO_LAYERS, python ? 'server-fastapi' : 'server-node'),
+      ...dataDirs,
+    ];
+    fs.writeFileSync(at('docker-compose.yml'), buildRootCompose(layerDirs, python ? 'fastapi' : 'node'));
+    fs.writeFileSync(
+      at('.dockerignore'),
+      joinDockerignore(readMonorepo(srcRoot, 'main/.dockerignore'), collectFragments(dataDirs, DOCKERIGNORE_FRAGMENT)),
+    );
+    for (const [part, framework] of [['web', web], ...(dashboard ? [['dashboard', dashboard]] : [])]) {
+      fs.writeFileSync(at(part, 'Dockerfile'), readMonorepo(srcRoot, `web-${framework}/Dockerfile`));
+      if (framework === 'vite') {
+        fs.mkdirSync(at(part, 'nginx'), { recursive: true });
+        fs.writeFileSync(at(part, 'nginx/default.conf.template'), readMonorepo(srcRoot, 'web-vite/nginx/default.conf.template'));
+      }
+    }
+    if (!python) {
+      fs.writeFileSync(
+        at('server', 'Dockerfile'),
+        fillDockerfile(readMonorepo(srcRoot, 'server-node/Dockerfile'), readDockerfileFragments(dataDirs), 'server/Dockerfile'),
+      );
+    }
+    const block = [readMonorepo(srcRoot, 'main/env.fragment'), ...(dashboard ? [readMonorepo(srcRoot, 'dashboard/env.fragment')] : [])]
+      .map((text) => text.replace(/\s+$/, ''))
+      .join('\n')
+      .replaceAll('__COMPOSE_NAME__', name)
+      .replaceAll('__EDGE_SUBNET__', edgeSubnet);
+    // TRUST_PROXY is filled in the block; the server's empty line is for a run on the host.
+    const serverLines = takeEnvLines((kept.server ?? '').split('\n'), (line) => line.startsWith('TRUST_PROXY=')).kept;
+    const root = tidyEnv([...block.split('\n'), '', ...serverLines, ...(moved.length > 0 ? ['', ...moved] : [])]);
+    fs.writeFileSync(at('.env.example'), root);
+  } finally {
+    fs.rmSync(temp, { recursive: true, force: true });
+  }
+}
+
+/**
+ * Entry point of `node docker-blocks.mjs monorepo ...`, which `monorepo.sh` calls.
+ *
+ * @param {string[]} argv Arguments after the script name.
+ * @returns {Promise<number>} Exit code.
+ */
+async function main(argv) {
+  if (argv[0] !== 'monorepo') {
+    console.error('usage: docker-blocks.mjs monorepo --src <dir> --root <dir> --web <fw> --server <fw> --name <n> --edge-subnet <cidr> [--dashboard <fw>] [--data <choice>] [--no-docker]');
+    return 2;
+  }
+  const opt = { docker: true };
+  for (let i = 1; i < argv.length; i += 1) {
+    if (argv[i] === '--no-docker') opt.docker = false;
+    else opt[argv[i].replace(/^--/, '')] = argv[++i];
+  }
+  const srcRoot = path.resolve(opt.src);
+  let dataLayers = [];
+  if (opt.data) {
+    const { overlays } = await import(pathToFileURL(path.join(srcRoot, 'scripts/recipes.mjs')).href);
+    const overlay = overlays[`${opt.server}-${opt.data.replaceAll(',', '-')}`];
+    if (!overlay) throw new Error(`no data overlay for ${opt.server} with ${opt.data}`);
+    dataLayers = overlay.layers;
+  }
+  composeMonorepoDocker({
+    srcRoot,
+    projectRoot: path.resolve(opt.root),
+    web: opt.web,
+    dashboard: opt.dashboard,
+    server: opt.server,
+    dataLayers,
+    name: opt.name,
+    edgeSubnet: opt['edge-subnet'],
+    docker: opt.docker,
+  });
+  return 0;
+}
+
+if (process.argv[1] && fs.realpathSync(process.argv[1]) === fs.realpathSync(fileURLToPath(import.meta.url))) {
+  main(process.argv.slice(2)).then(
+    (code) => process.exit(code),
+    (error) => {
+      console.error(error.message);
+      process.exit(1);
+    },
+  );
 }

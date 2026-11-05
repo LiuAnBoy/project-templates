@@ -3,7 +3,7 @@
 #
 #   curl -fsSL https://raw.githubusercontent.com/LiuAnBoy/project-templates/master/monorepo.sh \
 #     | bash -s -- <project> <next|vite> <plain|antd|mui|heroui> <nest|fastify|fastapi> \
-#       [--dashboard <next|vite> <plain|antd|mui|heroui>] [--data <store>[,redis]]
+#       [--dashboard <next|vite> <plain|antd|mui|heroui>] [--data <store>[,redis]] [--no-docker]
 #
 # --data picks the data store of the server once, when the project is created:
 # postgres, sqlite, mysql, redis, postgres,redis, sqlite,redis or mysql,redis
@@ -17,6 +17,12 @@
 # way as web/, and the workspace root with the contract package and the root
 # docs. With fastapi there is no contract package (the server is a Python
 # project), and the root documents say so.
+#
+# The project is also ready for Docker: a root docker-compose.yml, .dockerignore and
+# .env.example (built by scripts/docker-blocks.mjs from the same blocks the standalone
+# templates use), one Dockerfile per part, and the PostgreSQL cluster compose file
+# when the store has one. --no-docker leaves all of that out and takes the Docker
+# lines out of each part's .env.example; it comes at most once.
 #
 # The script downloads one archive, composes the project in a temporary
 # directory beside the target and moves it into place only when everything
@@ -39,6 +45,7 @@ pt_usage() {
 usage: monorepo.sh <project> <next|vite> <plain|antd|mui|heroui> <nest|fastify|fastapi>
                    [--dashboard <next|vite> <plain|antd|mui|heroui>]
                    [--data <postgres|sqlite|mysql|redis|postgres,redis|sqlite,redis|mysql,redis>]
+                   [--no-docker]
 EOF
 }
 
@@ -134,8 +141,39 @@ pt_name_compose() {
   mv "$1.named" "$1"
 }
 
-# pt_compose <archive> <root> <web-fw> <web-ui> <server> <dash-fw> <dash-ui> <data> <project>:
-# build the project tree in root. dash-fw is empty without a dashboard, data without a store.
+# pt_edge_subnet <name>: print a /24 inside 10.16.0.0-10.215.255.255 derived from the project's
+# compose name, the fixed subnet of the edge network that holds the web parts and the server.
+pt_edge_subnet() {
+  sum="$(printf '%s' "$1" | cksum | cut -d' ' -f1)"
+  echo "10.$((sum % 200 + 16)).$((sum / 200 % 256)).0/24"
+}
+
+# pt_docker_root <archive> <root> <web-fw> <server> <dash-fw> <data> <project> <docker:0|1>:
+# write the Docker side of the composed tree (docker=1) or take it out (docker=0), by the
+# one implementation the standalone templates are rendered with: scripts/docker-blocks.mjs
+# and the layers of source/, read from the same archive.
+pt_docker_root() {
+  src="$(dirname "$2")/src"
+  mkdir -p "$src" || return 1
+  tar -xzf "$1" --strip-components=1 -C "$src" "$TOP/scripts" "$TOP/source" </dev/null || {
+    pt_fail "could not extract scripts/ and source/ from the archive"
+    return 1
+  }
+  compose_name="$(pt_compose_name "$7")"
+  set -- "$@" "$(pt_edge_subnet "$compose_name")"
+  args=(monorepo --src "$src" --root "$2" --web "$3" --server "$4" --name "$compose_name" --edge-subnet "$9")
+  [ -n "$5" ] && args+=(--dashboard "$5")
+  [ -n "$6" ] && args+=(--data "$6")
+  [ "$8" = 0 ] && args+=(--no-docker)
+  node "$src/scripts/docker-blocks.mjs" "${args[@]}" </dev/null || {
+    pt_fail "could not compose the Docker files"
+    return 1
+  }
+}
+
+# pt_compose <archive> <root> <web-fw> <web-ui> <server> <dash-fw> <dash-ui> <data> <project> <docker>:
+# build the project tree in root. dash-fw is empty without a dashboard, data without a store;
+# docker is 1, or 0 for --no-docker.
 pt_compose() {
   archive="$1"
   root="$2"
@@ -167,6 +205,7 @@ pt_compose() {
     rm -f "$root/server/pnpm-lock.yaml" "$root/server/pnpm-workspace.yaml"
     pt_edit_part "$root/server" server "$contract" 0 || return 1
   fi
+  pt_docker_root "$archive" "$root" "$3" "$5" "$6" "$8" "$9" "${10}" || return 1
 
   for expected in package.json AGENTS.md CLAUDE.md docs/README.md web/package.json server/AGENTS.md; do
     [ -e "$root/$expected" ] || { pt_fail "the archive did not provide $expected"; return 1; }
@@ -198,7 +237,16 @@ pt_data_steps() {
   esac
 }
 
-# pt_next_steps <project> <server> <dashboard-fw> <web-fw> <data>: print what to do next.
+# pt_docker_steps <docker:0|1>: print the optional Docker start, nothing with --no-docker.
+# The image build installs from the lockfile, which the printed `pnpm install` writes.
+pt_docker_steps() {
+  [ "$1" = 1 ] || return 0
+  echo
+  echo "Docker (optional, after pnpm install has written the lockfile):"
+  echo "  cp .env.example .env && docker compose up -d --build --wait"
+}
+
+# pt_next_steps <project> <server> <dashboard-fw> <web-fw> <data> <docker>: print what to do next.
 # A server with a store refuses to start until its .env exists and its services run;
 # its queries need the database migrated, so all three come before the dev command.
 pt_next_steps() {
@@ -226,6 +274,7 @@ pt_next_steps() {
     echo "dashboard: http://localhost:$dash_port"
   fi
   echo "server: http://localhost:8000/api/v1/hello"
+  pt_docker_steps "$6"
   echo
   echo "Optional: git init && git add -A && git commit -m 'chore: initial commit'"
 }
@@ -246,6 +295,7 @@ pt_main() {
   dash_ui=""
   data=""
   data_given=0
+  docker=1
   while [ "$#" -gt 0 ]; do
     case "$1" in
       --dashboard)
@@ -259,6 +309,11 @@ pt_main() {
         data="$2"
         data_given=1
         shift 2
+        ;;
+      --no-docker)
+        [ "$docker" -eq 1 ] || { pt_usage; return 2; }
+        docker=0
+        shift
         ;;
       *)
         pt_usage
@@ -314,14 +369,14 @@ pt_main() {
   fi
 
   mkdir "$work/root" || return 1
-  pt_compose "$archive" "$work/root" "$web_fw" "$web_ui" "$server" "$dash_fw" "$dash_ui" "$data" "$project" || return 1
+  pt_compose "$archive" "$work/root" "$web_fw" "$web_ui" "$server" "$dash_fw" "$dash_ui" "$data" "$project" "$docker" || return 1
 
   if [ -e "$target" ] || [ -L "$target" ]; then
     pt_fail "$project appeared while the project was being composed; nothing was moved"
     return 1
   fi
   mv "$work/root" "$target" || { pt_fail "could not move the project into place"; return 1; }
-  pt_next_steps "$project" "$server" "$dash_fw" "$web_fw" "$data"
+  pt_next_steps "$project" "$server" "$dash_fw" "$web_fw" "$data" "$docker"
 }
 
 pt_main "$@"
