@@ -8,7 +8,7 @@ import { bounded } from '../common/concurrency/bounded.js';
 import { REDIS_KEY_PREFIX } from './client.js';
 
 /** How long the limiter waits for Redis before it gives up, in milliseconds. */
-export const RATE_LIMIT_TIMEOUT_MS = 1000;
+const RATE_LIMIT_TIMEOUT_MS = 1000;
 
 /** Settings of `createRateLimitStore`. */
 export type RateLimitStoreOptions = {

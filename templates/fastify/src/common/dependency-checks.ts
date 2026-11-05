@@ -22,7 +22,7 @@ export type DependencyCheck = {
 export const CHECK_TIMEOUT_MS = 2000;
 
 /** How long the health route reuses one result, failure included, in milliseconds. */
-export const HEALTH_CACHE_MS = 1000;
+const HEALTH_CACHE_MS = 1000;
 
 /**
  * Runs every check once, each under `bounded()`, all at the same time.

@@ -17,7 +17,6 @@ src/
     concurrency/     # bounded.ts
     dependency-checks.ts  # DependencyCheck, the health probe and the startup gate
     process-guard.ts # a failure nothing caught, and the deadline of a shutdown
-    assert-never.ts
     module.ts        # ServerModule type
     registry.ts      # createRegistry<T>()
   <domain>/

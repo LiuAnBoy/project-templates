@@ -1,6 +1,6 @@
 # UI
 
-This project uses MUI 9 (`@mui/material`) with `@mui/icons-material`, emotion, notistack, `react-hook-form` with `@hookform/resolvers`, and `zod`, chosen when the project was created. Use MUI's own components for every piece of UI; do not add a second component library or a styling framework.
+This project uses MUI 9 (`@mui/material`) with emotion and notistack, chosen when the project was created. Use MUI's own components for every piece of UI; do not add a second component library or a styling framework.
 
 ## What exists
 
@@ -14,7 +14,7 @@ This project uses MUI 9 (`@mui/material`) with `@mui/icons-material`, emotion, n
 - Every site-wide colour, font, radius and spacing value comes from `src/shared/styles/theme.ts`, the one source of the whole site's style. It exports `palette`, `radius`, `fontFamily` and `cssVariables`, then the `theme` built from them, which `UiProvider` passes to `ThemeProvider`. `ThemeVariables` publishes `cssVariables` on the root and `global.css` reads them. No hex colour or font literal appears in `modules/` or in shared components, and there is no top-level `src/styles/`.
 - Colours, typography and shape come from the theme (`color="primary"`, `theme.palette`, `theme.typography`). Do not repeat colour literals in `sx` across files; `sx` and `styled` are for one-off layout.
 - Components that use MUI hooks or state are client components under Next.js (`'use client'` at the top of the file).
-- Icons come from `@mui/icons-material`, imported by path (`@mui/icons-material/Add`), never from the package root.
+- Add `@mui/icons-material` with the first icon; import by path (`.../Add`), never from the root.
 
 ## The notification rule
 
@@ -37,4 +37,4 @@ export interface Notification {
 
 ## Forms
 
-Use `react-hook-form` with a zod schema through `zodResolver` from `@hookform/resolvers/zod`. Wrap each `TextField` in `Controller` and feed `error` and `helperText` from the field state. Keep field validation in the schema and show the server's `message` through the notification hook with `getErrorMessage`.
+Add `react-hook-form`, `@hookform/resolvers` and `zod` with the first form. Use `react-hook-form` with a zod schema through `zodResolver` from `@hookform/resolvers/zod`. Wrap each `TextField` in `Controller` and feed `error` and `helperText` from the field state. Keep field validation in the schema and show the server's `message` through the notification hook with `getErrorMessage`.

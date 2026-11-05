@@ -155,7 +155,13 @@ async function main() {
   runPull();
   // Drizzle Kit exits 0 when it cannot connect, so what it wrote is the only proof.
   const entries = await readJournal();
-  if (entries.length === 0) throw new Error(PULL_FAILED);
+  if (entries.length === 0) {
+    // An empty database can leave a schema file with no migration, which lint refuses.
+    for (const name of ['schema.ts', 'relations.ts']) {
+      await rm(resolve(MIGRATIONS_FOLDER, name), { force: true });
+    }
+    throw new Error(PULL_FAILED);
+  }
   for (const entry of entries) {
     const file = resolve(MIGRATIONS_FOLDER, `${entry.tag}.sql`);
     const text = await readFile(file, 'utf8');

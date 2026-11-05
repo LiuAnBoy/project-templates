@@ -1,6 +1,6 @@
 # UI
 
-This project uses Ant Design 6 (`antd`) with `@ant-design/icons`, chosen when the project was created. Use antd's own components for every piece of UI; do not add a second component library or a styling framework.
+This project uses Ant Design 6 (`antd`), chosen when the project was created. Use antd's own components for every piece of UI; do not add a second component library or a styling framework.
 
 ## What exists
 
@@ -15,7 +15,7 @@ This project uses Ant Design 6 (`antd`) with `@ant-design/icons`, chosen when th
 - Design values are antd tokens in `appTheme`. Do not override antd classes with global CSS and do not repeat colour literals per component.
 - Components that use antd hooks or state are client components under Next.js (`'use client'` at the top of the file).
 - Modals and confirm dialogs come from `App.useApp().modal`, never from static `Modal.confirm`, because static calls cannot see the theme or locale.
-- Icons come from `@ant-design/icons`, imported by name.
+- Add `@ant-design/icons` with the first icon, and import icons by name.
 
 ## The notification rule
 

@@ -6,7 +6,7 @@ import {
 } from '../common/dependency-checks.js';
 
 /** The path of the health route, which sits outside `/api/v1`. */
-export const HEALTH_PATH = '/api/health';
+const HEALTH_PATH = '/api/health';
 
 /** Options of `healthRoutes`. */
 export type HealthOptions = {

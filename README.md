@@ -42,7 +42,7 @@ Overlay 在**建立專案時**套用一次，不是安裝到已在開發的專�
 - `shared/hooks/useNotification.ts`：同樣四個方法，改用該元件庫的通知（antd 用 `App.useApp`、MUI 用 notistack、HeroUI 用 `toast`），呼叫端不用改，附測試。
 - `shared/styles/theme.ts`：整站唯一的樣式來源（顏色、字型、圓角、間距），元件庫的 theme 從這裡取值。
 - 以該元件庫自己的元件渲染的首頁 `Welcome`，以及一個 Playwright 測試，斷言只有該元件庫的樣式表才會產生的計算樣式。
-- Next.js 所需的設定（例如樣式註冊的 layout）、HeroUI 的 PostCSS 設定與 `cn` 工具。
+- Next.js 所需的設定（例如樣式註冊的 layout）與 HeroUI 的 PostCSS 設定。
 - 文件：`docs/rules/ui.md`（該元件庫的使用規則）、`docs/styles.md`、`docs/components/README.md`、`docs/components/useNotification.md`，以及 overlay 版的 `AGENTS.md`。
 
 ## 三個一行指令

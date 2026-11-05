@@ -2,7 +2,7 @@
 
 MySQL is accessed through Drizzle and `mysql2`. The Drizzle schema, written in TypeScript, owns the database schema; migrations are SQL files generated from it, reviewed and committed. One source of truth means a schema change is one diff that a reviewer reads in two forms: the TypeScript and the SQL it produced. The store-neutral rules are in `data.md`; this page adds what is specific to MySQL.
 
-This code has no production history. Every claim on this page was run against a real MySQL service by the project's own checks (`mysql:9`, which is 9.7.4, and `mysql:8.4`, which is 8.4.13); none comes from a deployed project.
+This code has no production history. Every claim on this page was run against a real MySQL service by the project's own checks (`mysql:9`, which is 9.7.4, and `mysql:8.4`, which is 8.4.13), except where the page says a claim rests on a test of the classifier alone; none comes from a deployed project.
 
 ## Connection settings
 
@@ -124,7 +124,7 @@ async transfer(input: TransferInput): Promise<void> {
 
 ### Reading a large result inside a transaction
 
-`.iterator()` on a handle fails with a `TypeError`: Drizzle's iterator reads the driver's raw connection, and the handle exposes only its checked `query` and `execute`, so nothing can stream past the end of a transaction. Read in pages inside a `run`, or iterate on the pool client outside one.
+`.iterator()` on a handle fails with a `TypeError`: Drizzle's iterator reads the driver's raw connection, and the handle exposes only its checked `query` and `execute`, so nothing can stream past the end of a transaction. Read in pages inside a `run`.
 
 ### When the pool is busy or the server went silent
 

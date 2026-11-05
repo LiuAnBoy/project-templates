@@ -33,7 +33,7 @@ const REDACT = {
  * @param level - How much is logged.
  * @returns The pino options.
  */
-export function loggerOptions(level: string): LoggerOptions {
+function loggerOptions(level: string): LoggerOptions {
   return { level, redact: REDACT, serializers: accessLogSerializers };
 }
 

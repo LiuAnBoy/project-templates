@@ -20,7 +20,7 @@ export const UNMATCHED_ROUTE = '<unmatched>';
  * @param request - The request being logged.
  * @returns The pattern, or the placeholder.
  */
-export function routePattern(request: FastifyRequest): string {
+function routePattern(request: FastifyRequest): string {
   const url = request.routeOptions?.url;
   return request.is404 || !url ? UNMATCHED_ROUTE : url;
 }

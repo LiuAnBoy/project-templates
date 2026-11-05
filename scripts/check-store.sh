@@ -495,6 +495,12 @@ step4_existing() {
     { fail "db:pull against a closed port exited 0" || return 1; }
   case "$OUT" in *canary*) fail "db:pull printed what its URL holds" || return 1 ;; esac
   say "db:pull against a closed port fails and prints nothing of its URL"
+  OUT="$(cd "$PROJ" && CI=true DATABASE_URL='mysql://canary-user:canary-pw@127.0.0.1:1/canary-db?sslmode=required' pnpm run db:pull 2>&1)" &&
+    { fail "db:pull with sslmode exited 0" || return 1; }
+  case "$OUT" in
+    *'invalid configuration: DATABASE_URL'*) say "db:pull refuses sslmode" ;;
+    *) fail "db:pull with sslmode did not name the setting" || return 1 ;;
+  esac
   lifecycle_run pull db:pull db-pull
   [ "$LIFECYCLE_RC" -eq 0 ] || { fail "db:pull failed" || return 1; }
   grep -rqs ptcheck_legacy "$PROJ/$NODE_SCHEMA_DIR" || { fail "the pulled schema does not hold the legacy table" || return 1; }

@@ -41,7 +41,7 @@ export function handleStrayFailure(
 }
 
 /** How long a graceful shutdown may take before the process ends anyway, in milliseconds. */
-export const SHUTDOWN_DEADLINE_MS = 10_000;
+const SHUTDOWN_DEADLINE_MS = 10_000;
 
 /**
  * Registers the handlers on the process. `main.ts` calls this first.

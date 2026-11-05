@@ -56,7 +56,7 @@ export async function readJournal(folder = MIGRATIONS_FOLDER) {
  *   the record does not exist yet.
  * @returns {number | null} The newest stamp, or null when nothing was ever applied.
  */
-export function newestStamp(applied) {
+function newestStamp(applied) {
   if (!applied || applied.length === 0) return null;
   return Math.max(...applied);
 }

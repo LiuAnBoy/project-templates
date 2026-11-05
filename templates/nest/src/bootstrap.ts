@@ -19,7 +19,7 @@ import {
 const JSON_BODY_LIMIT_BYTES = 1_048_576;
 
 /** The prefix of every route. */
-export const API_PREFIX = 'api/v1';
+const API_PREFIX = 'api/v1';
 
 /**
  * Builds the Fastify adapter the application runs on.

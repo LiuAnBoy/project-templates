@@ -9,7 +9,7 @@
 - `src/shared/styles/theme.ts` 是全站樣式的唯一來源：`palette`（primary、background、surface、text、textSecondary、border）、`radius`、`fontFamily`，以及 `cssVariables`。`cssVariables` 除了 `--theme-*` 之外，還把這些值對應到 HeroUI 的變數（`--accent`、`--background`、`--foreground`、`--surface`、`--muted`、`--border`、`--radius`）。要改設計值就改這裡，不要在 `global.css` 或元件裡重新宣告。
 - `src/shared/providers/ThemeVariables.tsx` 把 `cssVariables` 以未分層的 `:root` 規則放進頁面，所以會蓋過 HeroUI 分層的預設值；`global.css` 讀 `--theme-*`。沒有最上層的 `src/styles/`。
 - 同一個檔案也放 toast 的位置（`top end`）、同時顯示的數量（3）與停留時間（4000 毫秒）。
-- 組 class 字串用 `src/shared/utils/cn.ts` 的 `cn`，它會合併衝突的 Tailwind class。
+- 組 class 字串的規則見 `rules/ui.md`：第一次需要時才加 `clsx`、`tailwind-merge` 與 `cn`。
 
 ## 驗證
 
