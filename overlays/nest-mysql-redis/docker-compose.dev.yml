@@ -1,0 +1,41 @@
+# Development services for this project. The credentials are fake and for
+# local development only; never reuse them anywhere else.
+# Needs .env: copy .env.example and give COMPOSE_PROJECT_NAME a value that is
+# unique on this machine, or compose refuses to start.
+# Start:               docker compose -f docker-compose.dev.yml up -d --wait
+# Stop:                docker compose -f docker-compose.dev.yml down
+# Stop and drop data:  docker compose -f docker-compose.dev.yml down -v
+
+name: ${COMPOSE_PROJECT_NAME:?set COMPOSE_PROJECT_NAME in .env}
+
+services:
+  mysql:
+    image: mysql:9
+    environment:
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-app}
+      MYSQL_USER: ${MYSQL_USER:-app}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?set MYSQL_PASSWORD in .env}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?set MYSQL_ROOT_PASSWORD in .env}
+    ports:
+      - '127.0.0.1:${MYSQL_PORT:-3306}:3306'
+    volumes:
+      - mysql-data:/var/lib/mysql
+    healthcheck:
+      # The image starts a temporary server that listens on its socket only, so the
+      # check asks over TCP: it turns healthy once the real server is up.
+      test: ['CMD', 'mysqladmin', 'ping', '-h', '127.0.0.1']
+      interval: 5s
+      timeout: 3s
+      retries: 24
+  redis:
+    image: redis:8-alpine
+    ports:
+      - '127.0.0.1:${REDIS_PORT:-6379}:6379'
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+volumes:
+  mysql-data:

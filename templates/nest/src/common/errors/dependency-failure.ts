@@ -9,14 +9,14 @@
  * it hides in the cause chain: a network errno, a PostgreSQL SQLSTATE of the
  * connection classes, a refused login or database, a TLS failure, a `FATAL` reply
  * of the server, a SQLite code for a database that is busy, locked or cannot be
- * opened, or an error a Redis or PostgreSQL client raises while it has no usable
- * connection. A wrong password is on the list because the answer to a client is the
+ * opened, an error a MySQL, Redis or PostgreSQL client raises while it has no usable
+ * connection, or a `mysql2` code of a login, a database or a TLS handshake it refused. A wrong password is on the list because the answer to a client is the
  * same as for a server that is down: this request cannot be served and nothing about
  * it is wrong. A constraint violation, a syntax error and anything unrecognised
  * are not on the list, so a new failure mode arrives as a 500 that gets investigated.
  *
  * The codes also decide which messages the log withholds (`isConnectionLayerFailure`).
- * The fixed messages of `pg` and ioredis count as an outage and stay readable.
+ * The fixed messages of `pg`, `mysql2` and ioredis count as an outage and stay readable.
  */
 import { flattenCauses, read } from './cause-chain.js';
 
@@ -47,6 +47,43 @@ const SQLITE_OUTAGE_PREFIXES = [
 const REDIS_OFFLINE_MESSAGES: ReadonlySet<string> = new Set([
   'Connection is closed.',
   "Stream isn't writeable and enableOfflineQueue options is false",
+]);
+
+/**
+ * Messages `mysql2` raises for a pool that cannot serve a call or a connection that
+ * ended, with no code. `Pool is closed.`, `Queue limit reached.` and
+ * `No connections available.` are read from its pool, and the last one was
+ * reproduced by killing a connection a caller still held.
+ */
+const MYSQL_CONNECTION_MESSAGES: ReadonlySet<string> = new Set([
+  'Pool is closed.',
+  'Queue limit reached.',
+  'No connections available.',
+  "Can't add new command when connection is in closed state",
+]);
+
+/**
+ * `mysql2` codes of a connection that was lost or timed out: their messages are fixed
+ * text and stay readable. A server out of connections (`ER_CON_COUNT_ERROR`) needs no
+ * entry, since its SQLSTATE `08004` is of the connection class.
+ */
+const MYSQL_OFFLINE_CODES: ReadonlySet<string> = new Set([
+  'PROTOCOL_CONNECTION_LOST',
+  'PROTOCOL_SEQUENCE_TIMEOUT',
+]);
+
+/**
+ * `mysql2` codes of a connection the server or the TLS layer refused, whose SQLSTATE
+ * is not of the classes above. Their messages name the user, the host or the database
+ * (`Access denied for user ... to database ...`), so the log withholds them. A refused
+ * login (`ER_ACCESS_DENIED_ERROR`, SQLSTATE `28000`) is already of class `28`.
+ * `ER_BAD_DB_ERROR` needs a user with rights on every database and was reproduced as
+ * root, since the application's own user gets `ER_DBACCESS_DENIED_ERROR` instead.
+ */
+const MYSQL_REFUSAL_CODES: ReadonlySet<string> = new Set([
+  'ER_DBACCESS_DENIED_ERROR',
+  'ER_BAD_DB_ERROR',
+  'HANDSHAKE_SSL_ERROR',
 ]);
 
 /** The first word of a Redis reply that says the connection is not usable: not logged in, or still loading. */
@@ -103,8 +140,8 @@ function isSqliteOutage(code: string): boolean {
 
 /**
  * Whether an error is a client failing because it has no usable connection:
- * ioredis with no connection or refused by the server, or `pg` whose connection
- * ended, timed out or could not log in.
+ * ioredis with no connection or refused by the server, `pg` whose connection
+ * ended, timed out or could not log in, or `mysql2` whose pool or connection ended.
  *
  * These errors carry no errno or code, so they are recognised by their fixed
  * message or class name.
@@ -126,6 +163,7 @@ function isClientOffline(value: object): boolean {
   return (
     REDIS_OFFLINE_MESSAGES.has(message) ||
     PG_CONNECTION_MESSAGES.has(message) ||
+    MYSQL_CONNECTION_MESSAGES.has(message) ||
     PG_LOGIN_MESSAGE.test(message) ||
     (name === 'ReplyError' && REDIS_UNUSABLE_REPLY.test(message))
   );
@@ -168,7 +206,8 @@ function codesOf(value: object): string[] {
  * @param value - One error in the chain.
  * @returns True for a network errno, a connection-class SQLSTATE, a refused login
  *   or database, any `FATAL` reply of a PostgreSQL server (it ends the connection
- *   before a statement ran), a SQLite open or lock failure and a TLS failure.
+ *   before a statement ran), a SQLite open or lock failure, a TLS failure and a
+ *   `mysql2` refusal.
  */
 export function isConnectionLayerFailure(value: unknown): boolean {
   if (typeof value !== 'object' || value === null) return false;
@@ -182,6 +221,7 @@ export function isConnectionLayerFailure(value: unknown): boolean {
         isConnectionSqlState(code) ||
         isRefusedConnectionSqlState(code) ||
         isSqliteOutage(code) ||
+        MYSQL_REFUSAL_CODES.has(code) ||
         TLS_CODE.test(code),
     )
   );
@@ -195,7 +235,11 @@ export function isConnectionLayerFailure(value: unknown): boolean {
  */
 function linkIsOutage(value: unknown): boolean {
   if (typeof value !== 'object' || value === null) return false;
-  return isConnectionLayerFailure(value) || isClientOffline(value);
+  return (
+    isConnectionLayerFailure(value) ||
+    isClientOffline(value) ||
+    codesOf(value).some((code) => MYSQL_OFFLINE_CODES.has(code))
+  );
 }
 
 /**

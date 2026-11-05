@@ -681,6 +681,32 @@ test('data overlay entries name, order and filter their layers', async () => {
   );
 });
 
+test('a store that names its frameworks gets overlays and live entries for those alone', async () => {
+  const { buildDataOverlays, buildDataLive, buildDockerLive, STORE_TRAITS, dataOverlays, DATA_LIVE } = await loadRecipes();
+  assert.deepEqual(STORE_TRAITS.mysql.frameworks, ['nest', 'fastify']);
+  const bases = {
+    nest: ['source/server/common', 'source/server/node', 'source/server/nest'],
+    fastapi: ['source/server/common', 'source/server/fastapi'],
+  };
+  const options = { frameworks: ['nest', 'fastapi'], stores: ['mysql', 'sqlite'] };
+  assert.deepEqual(Object.keys(buildDataOverlays(bases, options)), [
+    'nest-mysql',
+    'nest-mysql-redis',
+    'nest-sqlite',
+    'nest-sqlite-redis',
+    'nest-redis',
+    'fastapi-sqlite',
+    'fastapi-sqlite-redis',
+    'fastapi-redis',
+  ]);
+  assert.deepEqual(buildDataLive(options), ['nest-mysql-redis', 'nest-sqlite', 'nest-redis', 'fastapi-sqlite', 'fastapi-redis']);
+  assert.deepEqual(buildDockerLive(options), ['nest-mysql-redis', 'nest-sqlite', 'fastapi-sqlite']);
+  // The shipped recipes: four MySQL overlays, none on FastAPI, one of them live.
+  const mysql = Object.keys(dataOverlays).filter((name) => name.includes('mysql'));
+  assert.deepEqual(mysql, ['nest-mysql', 'nest-mysql-redis', 'fastify-mysql', 'fastify-mysql-redis']);
+  assert.deepEqual(DATA_LIVE.filter((name) => name.includes('mysql')), ['nest-mysql-redis', 'fastify-mysql-redis']);
+});
+
 test('every layer of every data overlay runs in a live overlay, or the rule fails', async () => {
   const { buildDataOverlays, buildDataLive, uncoveredLayers, dataOverlays, DATA_LIVE } = await loadRecipes();
   const bases = { nest: ['source/server/common', 'source/server/node', 'source/server/nest'] };
@@ -1039,6 +1065,7 @@ test('guard: a server store ships compose.server.fragment.yml, and a Docker laye
     'next-heroui',
     'nest-postgres-redis',
     'nest-sqlite',
+    'nest-mysql-redis',
     'fastapi-postgres-redis',
     'fastapi-sqlite',
   ]);

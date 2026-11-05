@@ -131,22 +131,36 @@ overlays['workspace-no-contract'] = {
 export const DATA_FRAMEWORKS = ['nest', 'fastify', 'fastapi'];
 
 /** @type {readonly string[]} */
-export const DATA_STORES = ['postgres', 'sqlite'];
+export const DATA_STORES = ['postgres', 'sqlite', 'mysql'];
 
 /**
  * What a store needs from the layer structure: `sql` stores share the
  * `source/data/sql/<node|fastapi>` layer, `server` stores need the compose
  * block that runs them (SQLite is a file and has none), and a store that is
  * not a `database` (Redis) has an `alone` layer that gives a project with no
- * other store the heading and notes `docs/database.md` and `AGENTS.md` need.
+ * other store the heading and notes `docs/database.md` and `AGENTS.md` need. A
+ * store with `frameworks` pairs only with those; one without pairs with all.
  *
- * @type {Readonly<Record<string, {sql: boolean, server: boolean, database: boolean}>>}
+ * @type {Readonly<Record<string, {sql: boolean, server: boolean, database: boolean, frameworks?: readonly string[]}>>}
  */
 export const STORE_TRAITS = {
   postgres: { sql: true, server: true, database: true },
   sqlite: { sql: true, server: false, database: true },
+  mysql: { sql: true, server: true, database: true, frameworks: ['nest', 'fastify'] },
   redis: { sql: false, server: true, database: false },
 };
+
+/**
+ * Whether a store pairs with a framework.
+ *
+ * @param {string} store A store named in STORE_TRAITS.
+ * @param {string} framework A backend framework.
+ * @returns {boolean} False only when the store names its frameworks and omits this one.
+ */
+function pairs(store, framework) {
+  const frameworks = STORE_TRAITS[store]?.frameworks;
+  return frameworks === undefined || frameworks.includes(framework);
+}
 
 /**
  * Generate the data overlay entries.
@@ -162,7 +176,8 @@ export const STORE_TRAITS = {
  *
  * @param {Record<string, string[]>} baseRecipes The standalone templates.
  * @param {{frameworks: readonly string[], stores: readonly string[]}} options
- *   The frameworks, and the database stores each pairs with Redis.
+ *   The frameworks, and the database stores each pairs with Redis; a store that
+ *   names its frameworks gets no overlay for another.
  * @returns {Record<string, {base: string, layers: string[], agentsLayers: string[]}>} Overlay entries.
  * @throws {Error} On a framework with no base recipe or a store with no traits.
  */
@@ -174,7 +189,10 @@ export function buildDataOverlays(baseRecipes, { frameworks, stores }) {
     const node = framework !== 'fastapi';
     /** @type {string[][]} Each combination: the database store, if any, then redis. */
     const combos = [];
-    for (const store of stores) combos.push([store], [store, 'redis']);
+    for (const store of stores) {
+      if (!STORE_TRAITS[store]) throw new Error(`data overlays: no STORE_TRAITS entry for "${store}"`);
+      if (pairs(store, framework)) combos.push([store], [store, 'redis']);
+    }
     combos.push(['redis']);
     for (const combo of combos) {
       for (const store of combo) {
@@ -215,6 +233,7 @@ export function buildDataLive({ frameworks, stores }) {
   const live = [];
   for (const framework of frameworks) {
     for (const store of stores) {
+      if (!pairs(store, framework)) continue;
       live.push(`${framework}-${store}${STORE_TRAITS[store]?.server ? '-redis' : ''}`);
     }
     live.push(`${framework}-redis`);
@@ -268,6 +287,7 @@ export function buildDockerLive({ named = [], frameworks, stores }) {
   const live = [...named];
   for (const framework of frameworks) {
     for (const store of stores) {
+      if (!pairs(store, framework)) continue;
       live.push(`${framework}-${store}${STORE_TRAITS[store]?.server ? '-redis' : ''}`);
     }
   }
@@ -307,7 +327,7 @@ export function uncoveredDockerLayers(targets, live, dockerLayers) {
 /**
  * The targets that run as images: the standalone templates and the UI overlay named
  * outright, then `nest` and `fastapi` with each database store, as
- * `buildDockerLive` generates them. `test-render.mjs` fails when a layer holding a
+ * `buildDockerLive` generates them (a store that names its frameworks only with those). `test-render.mjs` fails when a layer holding a
  * Docker fragment is in none of them.
  *
  * @type {string[]}

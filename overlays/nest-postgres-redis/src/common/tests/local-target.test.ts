@@ -16,13 +16,29 @@ describe('requireLocalUrl', () => {
     expect(() => requireLocalUrl('X', { X: url })).not.toThrow(/secret-pw/);
   });
 
-  it('refuses a URL whose query overrides the host', () => {
-    for (const query of ['host=db.example.com', 'hostaddr=10.0.0.5']) {
+  it('refuses a URL whose query can move the server: host, hostaddr, socketPath, unix_socket', () => {
+    for (const query of [
+      'host=db.example.com',
+      'hostaddr=10.0.0.5',
+      'socketPath=/tmp/other.sock',
+      'unix_socket=/tmp/other.sock',
+    ]) {
       const url = `postgresql://u:secret-pw@localhost:5432/app?${query}`;
       expect(() => requireLocalUrl('X', { X: url })).toThrow(
-        /host or hostaddr/,
+        /query key outside/,
       );
       expect(() => requireLocalUrl('X', { X: url })).not.toThrow(/secret-pw/);
+    }
+  });
+
+  it('lets the charset and the TLS keys through', () => {
+    for (const query of [
+      'charset=utf8mb4',
+      'sslmode=require',
+      'ssl=%7B%7D&charset=utf8mb4',
+    ]) {
+      const url = `mysql://u:p@localhost:3306/app?${query}`;
+      expect(requireLocalUrl('X', { X: url })).toBe(url);
     }
   });
 

@@ -42,15 +42,15 @@
 #      which read no `env_file`, do not (their whole environment is read, and
 #      must hold PATH, so an empty read is never an absence).
 #   6. Stores (a project with a `migrate` service or a store service). `migrate`
-#      ran a migration the script plants in the copy and exited 0: PostgreSQL
-#      holds its table, and on SQLite the file belongs to uid 1000 in the named
+#      ran a migration the script plants in the copy and exited 0: PostgreSQL or
+#      MySQL holds its table (MySQL read as the application's user), and on SQLite the file belongs to uid 1000 in the named
 #      volume, whose top-level declaration `config` lists, and `server` still
 #      answers after a restart. `server` and `migrate` see every TEST_* URL and
 #      *_ROOT_PASSWORD of .env empty. With each store service stopped in turn,
 #      `run --no-deps server` exits non-zero within STORE_BOUND, names the store
-#      and prints no password, URL or host:port. With the PostgreSQL password
-#      changed behind the volume, `up` exits non-zero, `migrate` prints no user,
-#      database, host or password, and `server` stays `created`.
+#      and prints no password, URL or host:port. With the PostgreSQL or MySQL
+#      password changed behind the volume, `up` exits non-zero, `migrate` prints no
+#      user, database, host or password, and `server` stays `created`.
 #   7. The switch (a project with docker-compose.postgres-cluster.yml): a
 #      throwaway network and PostgreSQL, named from the project name. Only the
 #      four .env lines COMPOSE_FILE, POSTGRES_DOCKER_NETWORK, DATABASE_URL and
@@ -71,10 +71,12 @@
 #     that answers GET / and publishes `WEB_PORT`; it names no `container_name`.
 #   - A web service reads no `env_file`.
 #   - A project with a database store has a `migrate` service (the server's image
-#     with its own command) that `server` waits on, and either a `postgres`
-#     service whose URL compose builds for `server` and `migrate`, or a named
-#     volume `sqlite-data` mounted at /app/data. `POSTGRES_USER` and
-#     `POSTGRES_DATABASE` are `.env` lines; this script gives them unique values.
+#     with its own command) that `server` waits on, and either a `postgres` or
+#     `mysql` service whose URL compose builds for `server` and `migrate`, or a
+#     named volume `sqlite-data` mounted at /app/data. `POSTGRES_USER` and
+#     `POSTGRES_DATABASE`, or `MYSQL_USER` and `MYSQL_DATABASE`, are `.env` lines;
+#     this script gives them unique values. `POSTGRES_PASSWORD` or `MYSQL_PASSWORD`
+#     is the application's password in `.env`.
 #     A Node project keeps its migrations in `drizzle/` (with `meta/_journal.json`),
 #     a Python project in `alembic/versions/`.
 #   - A Python project has a `pyproject.toml`; anything else is a Node project.
@@ -315,6 +317,10 @@ write_env() {
   if grep -q '^POSTGRES_USER=' "$PROJ/.env"; then
     set_env POSTGRES_USER "ptu${RANDOM}x"
     set_env POSTGRES_DATABASE "ptd${RANDOM}x"
+  fi
+  if grep -q '^MYSQL_USER=' "$PROJ/.env"; then
+    set_env MYSQL_USER "ptu${RANDOM}x"
+    set_env MYSQL_DATABASE "ptd${RANDOM}x"
   fi
   plant_migration
 }
@@ -772,6 +778,19 @@ check_migrated() {
     say "$LABEL: migrate exited 0 and its table is in the database"
     return 0
   fi
+  if has_service mysql; then
+    user="$(env_value "$PROJ/.env" MYSQL_USER)"
+    db="$(env_value "$PROJ/.env" MYSQL_DATABASE)"
+    read_checked "$WORK/probe.out" "the migrated table in mysql" \
+      compose_here exec -T -e "MYSQL_PWD=$(env_value "$PROJ/.env" MYSQL_PASSWORD)" mysql \
+      mysql -N -u"$user" "$db" -e "select count(*) from information_schema.TABLES where TABLE_SCHEMA = database() and TABLE_NAME = 'ptcheck_probe'" || return 1
+    if ! grep -q -x '1' "$WORK/probe.out"; then
+      fail "migrate exited 0 but the planted migration is not in the database"
+      return 1
+    fi
+    say "$LABEL: migrate exited 0 and its table is in the database"
+    return 0
+  fi
   if ! grep -q '^  sqlite-data:' "$PROJ/docker-compose.yml"; then
     fail "the named volume sqlite-data has no top-level declaration"
     return 1
@@ -822,7 +841,7 @@ store_down() {
     fail "with $svc stopped, the startup failure did not name it"
     return 1
   fi
-  password="$(env_value "$PROJ/.env" POSTGRES_PASSWORD)"
+  password="$(env_value "$PROJ/.env" POSTGRES_PASSWORD)$(env_value "$PROJ/.env" MYSQL_PASSWORD)"
   if [ -n "$password" ] && grep -q -F -- "$password" "$out"; then
     fail "with $svc stopped, the startup failure printed the password"
     return 1
@@ -839,24 +858,32 @@ store_down() {
 # check_stores_down: each store service stopped in turn.
 check_stores_down() {
   local svc
-  for svc in postgres redis; do
+  for svc in postgres mysql redis; do
     has_service "$svc" || continue
     store_down "$svc" || return 1
   done
 }
 
-# check_migrate_failure: with the PostgreSQL password changed behind its volume,
+# check_migrate_failure: with the PostgreSQL or MySQL password changed behind its volume,
 # migrate fails, server is never started, `up` is non-zero, and migrate's output
 # holds no user, database, host or password.
 check_migrate_failure() {
-  local out rc user db password state secret
-  has_service postgres || return 0
+  local out rc user db password state secret store port
   has_service migrate || return 0
-  user="$(env_value "$PROJ/.env" POSTGRES_USER)"
-  db="$(env_value "$PROJ/.env" POSTGRES_DATABASE)"
-  password="$(env_value "$PROJ/.env" POSTGRES_PASSWORD)"
+  if has_service postgres; then
+    store=postgres port=5432 pwname=POSTGRES_PASSWORD
+    user="$(env_value "$PROJ/.env" POSTGRES_USER)"
+    db="$(env_value "$PROJ/.env" POSTGRES_DATABASE)"
+  elif has_service mysql; then
+    store=mysql port=3306 pwname=MYSQL_PASSWORD
+    user="$(env_value "$PROJ/.env" MYSQL_USER)"
+    db="$(env_value "$PROJ/.env" MYSQL_DATABASE)"
+  else
+    return 0
+  fi
+  password="$(env_value "$PROJ/.env" "$pwname")"
   dc "$DOCKER_BOUND" down >/dev/null 2>&1 || { fail "could not stop the project"; return 1; }
-  set_env POSTGRES_PASSWORD "ptwrongpw${RANDOM}"
+  set_env "$pwname" "ptwrongpw${RANDOM}"
   out="$WORK/migrate-fail.out"
   dc "$UP_BOUND" up -d --wait >"$out" 2>&1
   rc=$?
@@ -890,7 +917,7 @@ check_migrate_failure() {
     fail "migrate printed nothing when it failed"
     return 1
   fi
-  for secret in "$user" "$db" "$password" "postgres:5432" "@postgres" "://"; do
+  for secret in "$user" "$db" "$password" "$store:$port" "@$store" "://"; do
     if grep -q -F -- "$secret" "$WORK/migrate.log"; then
       cat "$WORK/migrate.log" >&2
       fail "migrate's output holds '$secret'"
@@ -898,7 +925,7 @@ check_migrate_failure() {
     fi
   done
   say "$LABEL: a failing migrate leaves server unstarted, up exits $rc, and the output holds no host, user, database or password"
-  set_env POSTGRES_PASSWORD "$password"
+  set_env "$pwname" "$password"
 }
 
 # switch_wait_ready: wait until the throwaway PostgreSQL answers over TCP (the

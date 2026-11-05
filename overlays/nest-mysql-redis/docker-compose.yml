@@ -1,0 +1,92 @@
+# The whole project in containers: the images built from the Dockerfile in this
+# directory, and the services they need.
+# Needs .env: copy .env.example and give COMPOSE_PROJECT_NAME a value that is
+# unique on this machine, or compose refuses to start.
+# Start:               docker compose up -d --build --wait
+# Stop:                docker compose down
+# Stop and drop data:  docker compose down -v
+
+name: ${COMPOSE_PROJECT_NAME:?set COMPOSE_PROJECT_NAME in .env}
+
+services:
+  server:
+    build: .
+    env_file: .env
+    environment:
+      HOST: 0.0.0.0
+      PORT: '8000'
+      NODE_ENV: production
+      TRUST_PROXY: ${TRUST_PROXY:-}
+      DATABASE_URL: mysql://${MYSQL_USER:-app}:${MYSQL_PASSWORD:?set MYSQL_PASSWORD in .env}@mysql:3306/${MYSQL_DATABASE:-app}
+      TEST_DATABASE_URL: ''
+      MYSQL_ROOT_PASSWORD: ''
+      REDIS_URL: redis://redis:6379
+      TEST_REDIS_URL: ''
+    ports:
+      - '127.0.0.1:${PORT:-8000}:8000'
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - fetch('http://127.0.0.1:8000/api/health').then((r) => process.exit(Number(r.status !== 200)), () => process.exit(1))
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+  migrate:
+    # The one-shot migration: the server's image with its own command. It exits 0
+    # when the database is up to date, and `server` starts only after that.
+    build: .
+    env_file: .env
+    command: ['node', 'scripts/db/migrate.mjs']
+    environment:
+      NODE_ENV: production
+      TEST_REDIS_URL: ''
+      DATABASE_URL: mysql://${MYSQL_USER:-app}:${MYSQL_PASSWORD:?set MYSQL_PASSWORD in .env}@mysql:3306/${MYSQL_DATABASE:-app}
+      TEST_DATABASE_URL: ''
+      MYSQL_ROOT_PASSWORD: ''
+    restart: 'no'
+    depends_on:
+      mysql:
+        condition: service_healthy
+  mysql:
+    image: mysql:9
+    environment:
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-app}
+      MYSQL_USER: ${MYSQL_USER:-app}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?set MYSQL_PASSWORD in .env}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?set MYSQL_ROOT_PASSWORD in .env}
+    ports:
+      - '127.0.0.1:${MYSQL_PORT:-3306}:3306'
+    volumes:
+      - mysql-data:/var/lib/mysql
+    healthcheck:
+      # The image starts a temporary server that listens on its socket only, so the
+      # check asks over TCP: it turns healthy once the real server is up.
+      test: ['CMD', 'mysqladmin', 'ping', '-h', '127.0.0.1']
+      interval: 5s
+      timeout: 3s
+      retries: 24
+    restart: unless-stopped
+  redis:
+    image: redis:8-alpine
+    ports:
+      - '127.0.0.1:${REDIS_PORT:-6379}:6379'
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    restart: unless-stopped
+
+volumes:
+  mysql-data:

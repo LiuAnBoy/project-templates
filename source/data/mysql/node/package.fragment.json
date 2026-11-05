@@ -1,0 +1,8 @@
+{
+  "scripts": {
+    "db:pull": "node --env-file-if-exists=.env scripts/db/pull.mjs"
+  },
+  "dependencies": {
+    "mysql2": "3.24.6"
+  }
+}

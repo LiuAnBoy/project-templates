@@ -8,41 +8,55 @@
 #
 # Steps, in order, all in the copy:
 #   1. .env: the whole `.env.example`, with only the ports changed to 15432
-#      (PostgreSQL) and 16379 (Redis), in the *_PORT lines and inside the URLs,
-#      so every line of every block is under test and compose and the server
-#      read the same file.
+#      (PostgreSQL), 13306 (MySQL) and 16379 (Redis), in the *_PORT lines and
+#      inside the URLs, so every line of every block is under test and compose and
+#      the server read the same file.
 #   2. Services: `docker compose -f docker-compose.dev.yml -p <unique> up -d
 #      --wait` validates the joined file and the healthchecks. A trap runs
 #      `down -v`. A taken port fails before anything starts.
 #   3. Store tests: `pnpm run test:integration` (Node) or `make test-integration`
 #      (Python), with `.env` in their environment.
-#   4. Lifecycle: add a throwaway table, generate a migration, the project's lint
+#   4. Existing database, only when the project has a `db:pull` script (Node): a
+#      legacy table with rows is created through the service, `db:pull` adopts it,
+#      lint and the format check pass over the pulled schema, `db:generate` then
+#      writes nothing, a new table is generated, `db:migrate` applies it, the
+#      legacy table's structure and rows are unchanged and status lists the
+#      baseline and the new migration as applied. The copy's migrations, schema and
+#      the service's tables are put back before step 5.
+#   5. Lifecycle: add a throwaway table, generate a migration, the project's lint
 #      and format check pass over it, status lists it, migrate prints it, status
 #      is empty, a second migrate is a no-op. Only when the project has `db:migrate`
 #      (Node) or a `db-migrate` target (Python).
-#   5. Empty environment: the server exits non-zero and names every connection
+#   6. Empty environment: the server exits non-zero and names every connection
 #      variable; then with HOST set to a sentinel and the settings still missing,
 #      the same, and the sentinel is not in the output. Each connection URL made
 #      malformed in turn (a port that is no number): the same, one setting named at
 #      a time, and no part of the value in the output.
-#   6. Boot: live-check.sh boots from `.env` after migrating (LIVE_DOTENV and
+#   7. Boot: live-check.sh boots from `.env` after migrating (LIVE_DOTENV and
 #      LIVE_PREPARE) and asserts hello, the 404 and health.
-#   7. Store down at startup: with each service stopped in turn, or on SQLite
+#   8. Store down at startup: with each service stopped in turn, or on SQLite
 #      with the path wrong, the server exits non-zero within its bound, the
 #      output names the dependency and holds no URL, password or SQLite path
-#      from `.env`, and on SQLite no file appears.
-#   8. Outage after startup: with the server up, stopping a service makes health
+#      from `.env`, and on SQLite no file appears. With a database service
+#      stopped, `db:status` and `db:migrate` (`db-status`, `db-migrate`) also exit
+#      non-zero and their output holds no URL, password or `localhost`; Redis is
+#      skipped, which those commands never reach.
+#   9. Outage after startup: with the server up, stopping a service makes health
 #      answer 503 {"status":"unavailable"} within its bound (with Redis, hello
 #      answers the 503 failure envelope too); starting it again makes health
 #      answer 200, and the process never ended.
-# A project with no compose file (SQLite alone) skips steps 2 and 8.
+# A project with no compose file (SQLite alone) skips steps 2 and 9.
 #
 # What the script assumes of an overlay (the contract its layers meet):
 #   - `.env.example` lines are NAME=value; the connection settings are the
-#     NAME_URL lines not starting with TEST_; POSTGRES_PORT and REDIS_PORT are the
-#     host ports of compose; a DATABASE_URL without `://` is a SQLite path.
+#     NAME_URL lines not starting with TEST_; POSTGRES_PORT, MYSQL_PORT and
+#     REDIS_PORT are the host ports of compose; a DATABASE_URL without `://` is a
+#     SQLite path.
 #   - Node: scripts install via the lockfile, `build`, `start`, `test:integration`,
-#     `db:generate`, `db:migrate`, `db:status`; the schema directory and the
+#     `db:generate`, `db:migrate`, `db:status` and, for a store that can adopt a
+#     database that already has tables, `db:pull` (which moves the pulled schema into
+#     the schema directory, exports it from `index.ts` and leaves a baseline in the
+#     migration folder); the schema directory and the
 #     migration folder are the NODE_* values below. Python: Makefile targets
 #     `test-integration`, `start`, `db-generate`, `db-migrate`, `db-status`; the
 #     models package and the migration folder are the PY_* values below.
@@ -61,6 +75,7 @@
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 PG_PORT=15432
+MYSQL_PORT=13306
 REDIS_PORT=16379
 SERVER_PORT="${LIVE_PORT:-8000}"
 STORE_BOUND="${STORE_BOUND:-30}"
@@ -317,20 +332,23 @@ step1_env() {
   echo "--- 1. .env"
   sed -E \
     -e "s/^POSTGRES_PORT=.*/POSTGRES_PORT=$PG_PORT/" \
+    -e "s/^MYSQL_PORT=.*/MYSQL_PORT=$MYSQL_PORT/" \
     -e "s/^REDIS_PORT=.*/REDIS_PORT=$REDIS_PORT/" \
     -e "/_PORT=/!s/:5432([^0-9]|\$)/:$PG_PORT\\1/g" \
+    -e "/_PORT=/!s/:3306([^0-9]|\$)/:$MYSQL_PORT\\1/g" \
     -e "/_PORT=/!s/:6379([^0-9]|\$)/:$REDIS_PORT\\1/g" \
     "$PROJ/.env.example" >"$PROJ/.env" || return 1
   CONN_VARS="$(grep -E '^[A-Za-z_][A-Za-z0-9_]*_URL=' "$PROJ/.env" | grep -v '^TEST_' | cut -d= -f1)"
   [ -n "$CONN_VARS" ] || { fail ".env.example holds no connection setting (a NAME_URL line)" || return 1; }
   SQLITE_PATH=""
   database_url="$(env_value "$PROJ/.env" DATABASE_URL)"
+  DATABASE_SCHEME="${database_url%%://*}"
   case "$database_url" in
     "") ;;
     *://*) ;;
     *) SQLITE_PATH="$database_url" ;;
   esac
-  say ".env written from .env.example with the ports $PG_PORT and $REDIS_PORT"
+  say ".env written from .env.example with the ports $PG_PORT, $MYSQL_PORT and $REDIS_PORT"
 }
 
 # step2_services: start the compose services and wait for their healthchecks.
@@ -376,6 +394,15 @@ import { sqliteTable, text } from 'drizzle-orm/sqlite-core';
 
 export const checkProbe = sqliteTable('check_probe', {
   id: text('id').primaryKey(),
+});
+EOF
+    elif [ "$DATABASE_SCHEME" = mysql ]; then
+      # MySQL cannot key a table on `text`, so the key has a length.
+      cat >"$PROJ/$NODE_SCHEMA_DIR/check_probe.ts" <<'EOF'
+import { mysqlTable, varchar } from 'drizzle-orm/mysql-core';
+
+export const checkProbe = mysqlTable('check_probe', {
+  id: varchar('id', { length: 36 }).primaryKey(),
 });
 EOF
     else
@@ -430,10 +457,79 @@ lifecycle_run() {
   echo "$OUT" | sed 's/^/     | /'
 }
 
-# step4_lifecycle: generate, status, migrate, status, migrate again.
-step4_lifecycle() {
-  if [ "$HAS_DB" -ne 1 ]; then echo "--- 4. lifecycle: none (no database)"; return 0; fi
-  echo "--- 4. lifecycle"
+# legacy_sql <statements>: run SQL as the application's user through the store's own
+# client in its compose service. The recipe is per scheme; a store that can adopt a
+# database (a `db:pull` script) and has no recipe here fails the step loudly.
+legacy_sql() {
+  case "$DATABASE_SCHEME" in
+    mysql)
+      compose_do exec -T -e MYSQL_PWD="$(env_value "$PROJ/.env" MYSQL_PASSWORD)" mysql \
+        mysql -N -u"$(env_value "$PROJ/.env" MYSQL_USER)" "$(env_value "$PROJ/.env" MYSQL_DATABASE)" -e "$1" 2>&1 |
+        grep -v 'Warning'
+      return "${PIPESTATUS[0]}"
+      ;;
+    *)
+      echo "check-store.sh has no legacy-table recipe for $DATABASE_SCHEME" >&2
+      return 1
+      ;;
+  esac
+}
+
+# step4_existing: adopt a database that already has a table with rows.
+step4_existing() {
+  if [ "$KIND" != node ] || ! has_script db:pull; then
+    echo "--- 4. existing database: none (no db:pull)"
+    return 0
+  fi
+  echo "--- 4. existing database"
+  mkdir -p "$WORK/pre4" || return 1
+  cp -R "$PROJ/drizzle" "$WORK/pre4/drizzle" && cp -R "$PROJ/$NODE_SCHEMA_DIR" "$WORK/pre4/schema" ||
+    { fail "could not keep the migrations and the schema to restore" || return 1; }
+  legacy_sql "create table ptcheck_legacy (id int auto_increment primary key, name varchar(100) not null, note text) engine=InnoDB; insert into ptcheck_legacy (name, note) values ('Ann', 'x'), ('Bob', NULL)" >/dev/null ||
+    { fail "could not create the legacy table through the service" || return 1; }
+  state_before="$(legacy_sql "show create table ptcheck_legacy; select * from ptcheck_legacy order by id")" ||
+    { fail "could not read the legacy table" || return 1; }
+  lifecycle_run pull db:pull db-pull
+  [ "$LIFECYCLE_RC" -eq 0 ] || { fail "db:pull failed" || return 1; }
+  grep -rqs ptcheck_legacy "$PROJ/$NODE_SCHEMA_DIR" || { fail "the pulled schema does not hold the legacy table" || return 1; }
+  [ -n "$(migration_files)" ] || { fail "db:pull left no baseline migration" || return 1; }
+  lifecycle_run lint lint lint
+  [ "$LIFECYCLE_RC" -eq 0 ] || { fail "the pulled schema fails the project's lint" || return 1; }
+  lifecycle_run format-check format:check format-check
+  [ "$LIFECYCLE_RC" -eq 0 ] || { fail "the pulled schema fails the project's format check" || return 1; }
+  say "db:pull adopted the legacy table and its schema passes lint and the format check"
+  before="$(migration_files)"
+  lifecycle_run generate db:generate db-generate
+  [ "$LIFECYCLE_RC" -eq 0 ] || { fail "generate failed after the pull" || return 1; }
+  [ "$before" = "$(migration_files)" ] || { fail "db:generate wrote a migration right after db:pull; the pulled schema does not match the database" || return 1; }
+  say "db:generate right after db:pull writes nothing"
+  write_probe_table || { fail "could not write the throwaway table" || return 1; }
+  lifecycle_run generate db:generate db-generate
+  [ "$LIFECYCLE_RC" -eq 0 ] || { fail "generate failed for the new table" || return 1; }
+  created="$(printf '%s\n' "$before" | diff - <(migration_files) | sed -n 's/^> //p')"
+  [ -n "$created" ] || { fail "generate wrote no migration for the new table" || return 1; }
+  tag="$(basename "$(echo "$created" | head -n 1)" .sql)"
+  lifecycle_run migrate db:migrate db-migrate
+  [ "$LIFECYCLE_RC" -eq 0 ] || { fail "migrate failed over the adopted database" || return 1; }
+  echo "$OUT" | grep -Fq -- "$tag" || { fail "migrate does not print $tag" || return 1; }
+  lifecycle_run status db:status db-status
+  [ "$LIFECYCLE_RC" -eq 0 ] || { fail "status failed after migrate" || return 1; }
+  echo "$OUT" | grep -Fq -- "already applied: 2" || { fail "status does not list the baseline and $tag as applied" || return 1; }
+  state_after="$(legacy_sql "show create table ptcheck_legacy; select * from ptcheck_legacy order by id")" ||
+    { fail "could not read the legacy table again" || return 1; }
+  [ "$state_before" = "$state_after" ] || { fail "the legacy table's structure or rows changed" || return 1; }
+  say "migrate applied $tag, recorded the baseline and left the legacy table's structure and rows unchanged"
+  legacy_sql "drop table if exists ptcheck_legacy, check_probe, __drizzle_migrations" >/dev/null ||
+    { fail "could not drop the tables of this step" || return 1; }
+  rm -rf "$PROJ/drizzle" "$PROJ/$NODE_SCHEMA_DIR"
+  cp -R "$WORK/pre4/drizzle" "$PROJ/drizzle" && cp -R "$WORK/pre4/schema" "$PROJ/$NODE_SCHEMA_DIR" ||
+    { fail "could not restore the migrations and the schema" || return 1; }
+}
+
+# step5_lifecycle: generate, status, migrate, status, migrate again.
+step5_lifecycle() {
+  if [ "$HAS_DB" -ne 1 ]; then echo "--- 5. lifecycle: none (no database)"; return 0; fi
+  echo "--- 5. lifecycle"
   before="$(migration_files)"
   write_probe_table || { fail "could not write the throwaway table" || return 1; }
   lifecycle_run generate db:generate db-generate
@@ -471,9 +567,9 @@ step4_lifecycle() {
   say "a second migrate is a no-op"
 }
 
-# step5_empty_env: the server refuses an empty environment, and the error leaks no value.
-step5_empty_env() {
-  echo "--- 5. empty environment"
+# step6_empty_env: the server refuses an empty environment, and the error leaks no value.
+step6_empty_env() {
+  echo "--- 6. empty environment"
   if port_busy "$SERVER_PORT"; then fail "port $SERVER_PORT is already in use" || return 1; fi
   if [ "$KIND" = node ] && has_script build; then
     (cd "$PROJ" && CI=true pnpm run build) || { fail "pnpm run build failed" || return 1; }
@@ -521,9 +617,9 @@ step5_empty_env() {
   done
 }
 
-# step6_boot: boot from `.env` after migrating and assert the routes.
-step6_boot() {
-  echo "--- 6. boot"
+# step7_boot: boot from `.env` after migrating and assert the routes.
+step7_boot() {
+  echo "--- 7. boot"
   prepare_cmd=""
   if [ "$HAS_DB" -eq 1 ]; then
     if [ "$KIND" = node ]; then prepare_cmd="pnpm run db:migrate"; else prepare_cmd="make db-migrate"; fi
@@ -532,9 +628,9 @@ step6_boot() {
     bash "$ROOT/scripts/live-check.sh" "$PROJ" || { fail "live-check failed from .env" || return 1; }
 }
 
-# step7_down_at_startup: a missing store fails the startup, naming the dependency and no secret.
-step7_down_at_startup() {
-  echo "--- 7. store down at startup"
+# step8_down_at_startup: a missing store fails the startup, naming the dependency and no secret.
+step8_down_at_startup() {
+  echo "--- 8. store down at startup"
   if port_busy "$SERVER_PORT"; then fail "port $SERVER_PORT is already in use" || return 1; fi
   RUN_ENV=()
   if [ "$HAS_COMPOSE" -eq 1 ]; then
@@ -542,6 +638,20 @@ step7_down_at_startup() {
       compose_do stop "$svc" >/dev/null || { fail "could not stop $svc" || return 1; }
       run_bounded "$STORE_BOUND" "$WORK/down-$svc.log" $START_CMD
       rc="$BOUND_RC"
+      if [ "$HAS_DB" -eq 1 ] && [ "$svc" != redis ]; then
+        for command in status migrate; do
+          if [ "$KIND" = node ]; then
+            OUT="$(project_run pnpm run "db:$command" 2>&1)"
+          else
+            OUT="$(project_run make "db-$command" 2>&1)"
+          fi
+          db_rc=$?
+          printf '%s\n' "$OUT" >"$WORK/db-$command-$svc.log"
+          if [ "$db_rc" -eq 0 ]; then fail_log "$WORK/db-$command-$svc.log" "db $command exited 0 with $svc stopped" || return 1; fi
+          assert_no_leak "$WORK/db-$command-$svc.log" localhost || return 1
+          say "with $svc stopped db $command exits $db_rc and prints no URL, password or localhost"
+        done
+      fi
       compose_do up -d --wait >/dev/null || { fail "could not start the services again" || return 1; }
       if [ "$rc" -eq 124 ]; then fail_log "$WORK/down-$svc.log" "with $svc stopped the server kept running past ${STORE_BOUND}s" || return 1; fi
       if [ "$rc" -eq 0 ]; then fail_log "$WORK/down-$svc.log" "with $svc stopped the server exited 0" || return 1; fi
@@ -572,10 +682,10 @@ step7_down_at_startup() {
   fi
 }
 
-# step8_outage: stop and restart each service under a running server.
-step8_outage() {
-  if [ "$HAS_COMPOSE" -ne 1 ]; then echo "--- 8. outage after startup: none (no service to stop)"; return 0; fi
-  echo "--- 8. outage after startup"
+# step9_outage: stop and restart each service under a running server.
+step9_outage() {
+  if [ "$HAS_COMPOSE" -ne 1 ]; then echo "--- 9. outage after startup: none (no service to stop)"; return 0; fi
+  echo "--- 9. outage after startup"
   start_server "$WORK/outage.log"
   if ! wait_health 200 "$READY_TIMEOUT"; then
     health_fail "health did not answer 200 within ${READY_TIMEOUT}s" || return 1
@@ -608,11 +718,12 @@ run_all() {
   step1_env || return 1
   step2_services || return 1
   step3_tests || return 1
-  step4_lifecycle || return 1
-  step5_empty_env || return 1
-  step6_boot || return 1
-  step7_down_at_startup || return 1
-  step8_outage || return 1
+  step4_existing || return 1
+  step5_lifecycle || return 1
+  step6_empty_env || return 1
+  step7_boot || return 1
+  step8_down_at_startup || return 1
+  step9_outage || return 1
 }
 
 if run_all; then

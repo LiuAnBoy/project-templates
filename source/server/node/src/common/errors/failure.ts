@@ -107,6 +107,13 @@ function isStatementFailure(error: unknown): boolean {
 const DATA_EXCEPTION = /^22/;
 
 /**
+ * Codes `mysql2` gives a failed statement (`ER_DUP_ENTRY`, `ER_TRUNCATED_WRONG_VALUE`).
+ * Their SQLSTATE cannot tell which quote a value, since `ER_TRUNCATED_WRONG_VALUE_FOR_FIELD`
+ * is `HY000` and quotes it, so the code prefix decides.
+ */
+const MYSQL_STATEMENT_CODE = /^ER_/;
+
+/**
  * Describes one link of a chain.
  *
  * @param link - One error in the chain.
@@ -153,11 +160,12 @@ function describe(
   } else if (
     underStatement &&
     code !== undefined &&
-    DATA_EXCEPTION.test(code)
+    (DATA_EXCEPTION.test(code) || MYSQL_STATEMENT_CODE.test(code))
   ) {
     // The driver's cause of a statement that sent a value of the wrong shape
-    // (SQLSTATE 22P02 and its class) quotes that value in its message. The code
-    // says what went wrong.
+    // (SQLSTATE 22P02 and its class, or a `mysql2` `ER_*` code, whose message
+    // quotes a duplicate key or a rejected value) quotes that value in its
+    // message. The code says what went wrong.
     link.message = '';
     if (stack !== undefined) link.stack = framesOf(stack, message);
   }

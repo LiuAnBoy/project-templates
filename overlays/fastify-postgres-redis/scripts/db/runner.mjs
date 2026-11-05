@@ -162,11 +162,21 @@ const CONNECTION_CODES = new Set([
   'SQLITE_CANTOPEN',
   'SQLITE_BUSY',
   'SQLITE_LOCKED',
+  'PROTOCOL_CONNECTION_LOST',
+  'PROTOCOL_SEQUENCE_TIMEOUT',
+  'ER_CON_COUNT_ERROR',
+  'ER_ACCESS_DENIED_ERROR',
+  'ER_DBACCESS_DENIED_ERROR',
+  'ER_BAD_DB_ERROR',
+  'HANDSHAKE_SSL_ERROR',
 ]);
 
-/** Fixed messages of `pg` for a connection that ended or timed out; they carry no code. */
+/** Fixed messages of `pg` and `mysql2` for a connection that ended or timed out; they carry no code. */
 const CONNECTION_MESSAGES =
-  /^(Connection terminated|timeout exceeded when trying to connect|Client has encountered a connection error)/;
+  /^(Connection terminated|timeout exceeded when trying to connect|Client has encountered a connection error|Pool is closed\.|No connections available\.|Queue limit reached\.|Can't add new command when connection is in closed state)/;
+
+/** The code of a failed statement of `mysql2`, whose message quotes a duplicate key or a rejected value. */
+const STATEMENT_CODE = /^ER_/;
 
 /**
  * Flattens an error and everything under it, following `cause` and the entries
@@ -222,7 +232,10 @@ function isConnectionLink(link) {
  * path. Any other failure prints its statement, when it has one, and the
  * message of every link under it, so the root cause is never lost, and an
  * `AggregateError` with an empty message never prints an empty line. Bound
- * values (`params`) are never printed.
+ * values (`params`) are never printed, and neither is the message of a link
+ * coded `ER_*` under a statement: `mysql2` quotes the duplicate key or the
+ * rejected value in it, and a unique index created over existing rows would
+ * print row data into a deploy log. Such a link prints its code alone.
  *
  * @param {unknown} error Whatever was thrown.
  * @returns {string} One or more lines, never empty.
@@ -241,13 +254,20 @@ export function describeMigrateFailure(error) {
     return `Cannot reach or open the database${codes.length > 0 ? ` (${codes.join(', ')})` : ''}. Check DATABASE_URL and that the server is running.`;
   }
   const lines = [];
+  let underStatement = false;
   for (const link of links) {
-    const text =
-      typeof link.query === 'string' && Array.isArray(link.params)
-        ? `Failed query: ${link.query}`
+    const isStatement =
+      typeof link.query === 'string' && Array.isArray(link.params);
+    const text = isStatement
+      ? `Failed query: ${link.query}`
+      : underStatement &&
+          typeof link.code === 'string' &&
+          STATEMENT_CODE.test(link.code)
+        ? `Database error ${link.code}`
         : typeof link.message === 'string'
           ? link.message.trim()
           : '';
+    if (isStatement) underStatement = true;
     if (text !== '' && !lines.includes(text)) lines.push(text);
   }
   if (lines.length === 0)
