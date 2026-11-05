@@ -1036,6 +1036,8 @@ export function composeMonorepoDocker(options) {
   const cluster = fs.existsSync(at('server')) ? fs.readdirSync(at('server')).filter((f) => /^docker-compose\..*-cluster\.yml$/.test(f)) : [];
   if (!docker) {
     for (const file of cluster) fs.rmSync(at('server', file), { force: true });
+    // Only a Vite part's Dockerfile reads its nginx template.
+    for (const part of parts) fs.rmSync(at(part, 'nginx'), { recursive: true, force: true });
     return;
   }
   for (const file of cluster) fs.renameSync(at('server', file), at(file));

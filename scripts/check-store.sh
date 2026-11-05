@@ -17,7 +17,8 @@
 #   3. Store tests: `pnpm run test:integration` (Node) or `make test-integration`
 #      (Python), with `.env` in their environment.
 #   4. Existing database, only when the project has a `db:pull` script (Node): a
-#      legacy table with rows is created through the service, `db:pull` adopts it,
+#      legacy table with rows is created through the service, `db:pull` against a
+#      closed port fails and prints nothing of its URL, `db:pull` adopts the table,
 #      lint and the format check pass over the pulled schema, `db:generate` then
 #      writes nothing, a new table is generated, `db:migrate` applies it, the
 #      legacy table's structure and rows are unchanged and status lists the
@@ -489,6 +490,11 @@ step4_existing() {
     { fail "could not create the legacy table through the service" || return 1; }
   state_before="$(legacy_sql "show create table ptcheck_legacy; select * from ptcheck_legacy order by id")" ||
     { fail "could not read the legacy table" || return 1; }
+  # A pull that cannot connect exits non-zero and prints none of what the URL holds.
+  OUT="$(cd "$PROJ" && CI=true DATABASE_URL='mysql://canary-user:canary-pw@127.0.0.1:1/canary-db' pnpm run db:pull 2>&1)" &&
+    { fail "db:pull against a closed port exited 0" || return 1; }
+  case "$OUT" in *canary*) fail "db:pull printed what its URL holds" || return 1 ;; esac
+  say "db:pull against a closed port fails and prints nothing of its URL"
   lifecycle_run pull db:pull db-pull
   [ "$LIFECYCLE_RC" -eq 0 ] || { fail "db:pull failed" || return 1; }
   grep -rqs ptcheck_legacy "$PROJ/$NODE_SCHEMA_DIR" || { fail "the pulled schema does not hold the legacy table" || return 1; }

@@ -405,10 +405,10 @@ data_overlays() {
 
 # check_no_docker: a composition made with --no-docker holds none of the Docker files.
 check_no_docker() {
-  compose "$WORK/m-nodocker" nodocker next plain nest --data postgres --no-docker || return 1
+  compose "$WORK/m-nodocker" nodocker vite plain nest --data postgres --no-docker || return 1
   proj="$WORK/m-nodocker/nodocker"
   for part in web server; do
-    for f in Dockerfile docker-compose.yml .dockerignore; do
+    for f in Dockerfile docker-compose.yml .dockerignore nginx; do
       [ ! -e "$proj/$part/$f" ] || { echo "FAIL --no-docker left $part/$f" >&2; return 1; }
     done
   done

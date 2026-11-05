@@ -168,10 +168,10 @@ docker compose up -d --build --wait
 
 - `COMPOSE_PROJECT_NAME` 是容器、網路與資料卷的名稱。留空時 compose 會失敗並指出這個變數，`docker-compose.dev.yml` 也一樣；兩個專案因此不會共用容器或資料卷，`docker compose down -v` 也不會碰到別的專案。
 - 容器裡的伺服器固定聽 8000；`.env` 的 `PORT` 是本機 `127.0.0.1` 上對應的埠。祕密只透過 `env_file` 與 `environment` 在執行時傳入，不會進入映像。
-- 有資料庫的專案多一個一次性的 `migrate` 服務，用伺服器的映像先套用 migration，`server` 等它成功才啟動；`server` 與 `migrate` 讀 `.env` 時，資料庫的超級使用者密碼與 `TEST_*` 網址會被清空，因為程式用不到。改連共用 PostgreSQL 的四行設定見 [資料 overlay](#資料-overlay)。
+- 有資料庫的專案多一個一次性的 `migrate` 服務，用伺服器的映像先套用 migration，`server` 等它成功才啟動；`server` 與 `migrate` 讀 `.env` 時，`TEST_*` 網址與 MySQL 的 root 密碼會被清空，因為程式用不到。PostgreSQL 的密碼不清空：專案自己的 PostgreSQL 只有一個管理員帳號，程式就用它連線，網址裡本來就有。改連共用 PostgreSQL 的四行設定見 [資料 overlay](#資料-overlay)。
 - Web 範本的服務叫 `web`，不讀 `env_file`，因為對外的容器不該拿到後端的資料庫帳密。它的值只來自 `.env` 的 `DOCKER_API_HOST`（API 的位置）與 `WEB_PORT`（本機 `127.0.0.1` 上的埠，預設 3000）。Next.js 把 `DOCKER_API_HOST` 當建置參數與執行時的 `API_HOST`；Vite 的 nginx 在容器啟動時才讀它，只轉發 `/api/v1/`，換 API 位置不必重新建置，但 nginx 啟動時必須解析得到這個主機，否則容器起不來。
 - `DOCKER_API_HOST` 預設 `http://host.docker.internal:8000`。Docker Desktop 把這個名稱轉到本機，所以能連到發佈在本機 `127.0.0.1` 的後端。Linux 上 `extra_hosts` 把它對應到 `host-gateway`，那是 bridge 位址，而後端只發佈在 `127.0.0.1`，預設值因此連不到本專案的後端。做法是讓 web 與後端加入同一個外部網路，`DOCKER_API_HOST` 填後端的服務名稱（`http://<服務名稱>:8000`）。主機的實際位址只連得到真的聽在那個位址上的後端，只發佈在 `127.0.0.1` 的後端不行。這是依 Docker 發佈埠的機制推得，沒有在 Linux 上實測。
-- 不使用 Docker 的專案刪掉這三個檔案即可。`AGENTS.md` 的 Docker 區塊與 `docs/rules/docker.md` 寫成「有這些檔案時」的規則，刪除之後仍然成立。
+- 不使用 Docker 的專案刪掉這三個檔案即可；Vite 專案另外刪掉只有映像用得到的 `nginx/`，PostgreSQL 專案另外刪掉 `docker-compose.postgres-cluster.yml`。`AGENTS.md` 的 Docker 區塊與 `docs/rules/docker.md` 寫成「有這些檔案時」的規則，刪除之後仍然成立。
 
 ### monorepo 的 Docker
 
@@ -185,7 +185,7 @@ cp .env.example .env && docker compose up -d --build --wait
 - 根目錄 `.env.example` 已填好 `COMPOSE_PROJECT_NAME`（專案名稱）與 `EDGE_SUBNET`（由名稱算出的 `10.x.y.0/24`）；名稱或網段在本機被占用時改它們。各部分的 `.env.example` 不再有 Docker 的行，`server/.env.example` 仍供在主機上執行的後端使用。
 - 前端與後端在 `edge` 網路上，儲存服務不在。`server` 不發佈埠，只經由前端到達；前端的埠（`WEB_PORT` 預設 3000，`DASHBOARD_PORT` 預設 3001）只綁 `127.0.0.1`。`TRUST_PROXY` 與 `EDGE_SUBNET` 相同，後端只相信 `edge` 上前端轉來的訪客位址，別處的容器偽造標頭也不會得到自己的限流桶；兩個專案的網段相撞時，`up` 會以 `Pool overlaps` 失敗，改 `.env` 即可。要把前端的埠開到 loopback 以外，前面必須有反向代理。
 - 前端不讀 `env_file`；後端與 `migrate` 讀根目錄的 `.env`。
-- 加 `--no-docker` 時，這些檔案與各部分的三個 Docker 檔案都不放，`docker-compose.dev.yml` 保留。
+- 加 `--no-docker` 時，這些檔案、各部分的三個 Docker 檔案與 Vite 的 `nginx/` 都不放，`docker-compose.dev.yml` 保留。
 
 ### 驗證映像
 

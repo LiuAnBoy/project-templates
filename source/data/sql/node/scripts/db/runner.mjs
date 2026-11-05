@@ -168,6 +168,13 @@ const CONNECTION_CODES = new Set([
   'ER_ACCESS_DENIED_ERROR',
   'ER_DBACCESS_DENIED_ERROR',
   'ER_BAD_DB_ERROR',
+  'ER_HOST_NOT_PRIVILEGED',
+  'ER_HOST_IS_BLOCKED',
+  'ER_ACCOUNT_HAS_BEEN_LOCKED',
+  'ER_USER_LIMIT_REACHED',
+  'ER_TOO_MANY_USER_CONNECTIONS',
+  'ER_MUST_CHANGE_PASSWORD_LOGIN',
+  'ER_SERVER_OFFLINE_MODE',
   'HANDSHAKE_SSL_ERROR',
 ]);
 
@@ -175,8 +182,8 @@ const CONNECTION_CODES = new Set([
 const CONNECTION_MESSAGES =
   /^(Connection terminated|timeout exceeded when trying to connect|Client has encountered a connection error|Pool is closed\.|No connections available\.|Queue limit reached\.|Can't add new command when connection is in closed state)/;
 
-/** The code of a failed statement of `mysql2`, whose message quotes a duplicate key or a rejected value. */
-const STATEMENT_CODE = /^ER_/;
+/** The code of a MySQL server's reply, whose message quotes a key or a value, or names the user or the host. */
+const SERVER_CODE = /^ER_/;
 
 /**
  * Flattens an error and everything under it, following `cause` and the entries
@@ -233,9 +240,10 @@ function isConnectionLink(link) {
  * message of every link under it, so the root cause is never lost, and an
  * `AggregateError` with an empty message never prints an empty line. Bound
  * values (`params`) are never printed, and neither is the message of a link
- * coded `ER_*` under a statement: `mysql2` quotes the duplicate key or the
- * rejected value in it, and a unique index created over existing rows would
- * print row data into a deploy log. Such a link prints its code alone.
+ * coded `ER_*`: `mysql2` quotes the duplicate key or the rejected value in it, so
+ * a unique index created over existing rows would print row data into a deploy
+ * log, and a refusal that no list here names can carry the user or the host. Such
+ * a link prints its code alone.
  *
  * @param {unknown} error Whatever was thrown.
  * @returns {string} One or more lines, never empty.
@@ -254,20 +262,16 @@ export function describeMigrateFailure(error) {
     return `Cannot reach or open the database${codes.length > 0 ? ` (${codes.join(', ')})` : ''}. Check DATABASE_URL and that the server is running.`;
   }
   const lines = [];
-  let underStatement = false;
   for (const link of links) {
     const isStatement =
       typeof link.query === 'string' && Array.isArray(link.params);
     const text = isStatement
       ? `Failed query: ${link.query}`
-      : underStatement &&
-          typeof link.code === 'string' &&
-          STATEMENT_CODE.test(link.code)
+      : typeof link.code === 'string' && SERVER_CODE.test(link.code)
         ? `Database error ${link.code}`
         : typeof link.message === 'string'
           ? link.message.trim()
           : '';
-    if (isStatement) underStatement = true;
     if (text !== '' && !lines.includes(text)) lines.push(text);
   }
   if (lines.length === 0)

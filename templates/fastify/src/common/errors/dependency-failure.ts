@@ -79,10 +79,20 @@ const MYSQL_OFFLINE_CODES: ReadonlySet<string> = new Set([
  * login (`ER_ACCESS_DENIED_ERROR`, SQLSTATE `28000`) is already of class `28`.
  * `ER_BAD_DB_ERROR` needs a user with rights on every database and was reproduced as
  * root, since the application's own user gets `ER_DBACCESS_DENIED_ERROR` instead.
+ * The rest refuse a login for its host, its account or its limits; they carry the
+ * SQLSTATE `HY000` or `42000` and need a server set up to refuse, so they are held to
+ * this list by a test of the classifier, not by a live refusal.
  */
 const MYSQL_REFUSAL_CODES: ReadonlySet<string> = new Set([
   'ER_DBACCESS_DENIED_ERROR',
   'ER_BAD_DB_ERROR',
+  'ER_HOST_NOT_PRIVILEGED',
+  'ER_HOST_IS_BLOCKED',
+  'ER_ACCOUNT_HAS_BEEN_LOCKED',
+  'ER_USER_LIMIT_REACHED',
+  'ER_TOO_MANY_USER_CONNECTIONS',
+  'ER_MUST_CHANGE_PASSWORD_LOGIN',
+  'ER_SERVER_OFFLINE_MODE',
   'HANDSHAKE_SSL_ERROR',
 ]);
 

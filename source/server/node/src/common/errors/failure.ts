@@ -107,11 +107,13 @@ function isStatementFailure(error: unknown): boolean {
 const DATA_EXCEPTION = /^22/;
 
 /**
- * Codes `mysql2` gives a failed statement (`ER_DUP_ENTRY`, `ER_TRUNCATED_WRONG_VALUE`).
- * Their SQLSTATE cannot tell which quote a value, since `ER_TRUNCATED_WRONG_VALUE_FOR_FIELD`
- * is `HY000` and quotes it, so the code prefix decides.
+ * Codes of a MySQL server's reply. A failed statement's quotes a value
+ * (`ER_DUP_ENTRY`, `ER_TRUNCATED_WRONG_VALUE`) and a refusal of a raw connection's
+ * can name the user or the host, with or without a statement above it. The SQLSTATE
+ * cannot tell which, since `ER_TRUNCATED_WRONG_VALUE_FOR_FIELD` is `HY000` and quotes
+ * it, so the code prefix decides.
  */
-const MYSQL_STATEMENT_CODE = /^ER_/;
+const MYSQL_SERVER_CODE = /^ER_/;
 
 /**
  * Describes one link of a chain.
@@ -158,14 +160,14 @@ function describe(
     link.message = `Failed query: ${query}`;
     if (stack !== undefined) link.stack = framesOf(stack, message);
   } else if (
-    underStatement &&
     code !== undefined &&
-    (DATA_EXCEPTION.test(code) || MYSQL_STATEMENT_CODE.test(code))
+    (MYSQL_SERVER_CODE.test(code) ||
+      (underStatement && DATA_EXCEPTION.test(code)))
   ) {
-    // The driver's cause of a statement that sent a value of the wrong shape
-    // (SQLSTATE 22P02 and its class, or a `mysql2` `ER_*` code, whose message
-    // quotes a duplicate key or a rejected value) quotes that value in its
-    // message. The code says what went wrong.
+    // A `mysql2` `ER_*` message quotes a duplicate key or a rejected value, or names
+    // the user or the host, and the driver's cause of a statement that sent a value
+    // of the wrong shape (SQLSTATE 22P02 and its class) quotes that value. The code
+    // says what went wrong.
     link.message = '';
     if (stack !== undefined) link.stack = framesOf(stack, message);
   }

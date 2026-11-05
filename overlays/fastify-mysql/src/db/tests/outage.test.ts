@@ -105,6 +105,42 @@ describe('mysql connection failures described for the log, with no service runni
   });
 });
 
+describe('mysql refusals of a login, by code', () => {
+  it('answers each as an outage and logs only its code', () => {
+    for (const code of [
+      'ER_HOST_NOT_PRIVILEGED',
+      'ER_HOST_IS_BLOCKED',
+      'ER_ACCOUNT_HAS_BEEN_LOCKED',
+      'ER_USER_LIMIT_REACHED',
+      'ER_TOO_MANY_USER_CONNECTIONS',
+      'ER_MUST_CHANGE_PASSWORD_LOGIN',
+      'ER_SERVER_OFFLINE_MODE',
+    ]) {
+      const error = Object.assign(
+        new Error("Refused 'canary-user'@'canary-host'"),
+        { code, sqlState: 'HY000' },
+      );
+
+      expect(isDependencyOutage(error)).toBe(true);
+      const logged = JSON.stringify(describeFailure(error));
+      expect(logged).toContain(code);
+      expect(logged).not.toContain('canary');
+    }
+  });
+
+  it('logs only the code of an ER_* error no list names, with no statement above it', () => {
+    const error = Object.assign(
+      new Error("Refused 'canary-user'@'canary-host'"),
+      { code: 'ER_SOME_FUTURE_REFUSAL' },
+    );
+
+    expect(isDependencyOutage(error)).toBe(false);
+    const logged = JSON.stringify(describeFailure(error));
+    expect(logged).toContain('ER_SOME_FUTURE_REFUSAL');
+    expect(logged).not.toContain('canary');
+  });
+});
+
 describe('mysql against a server that misbehaves', () => {
   let server: Server | undefined;
   const sockets = new Set<Socket>();

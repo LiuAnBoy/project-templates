@@ -7,6 +7,7 @@ import {
 } from 'mysql2/promise';
 import { z } from 'zod';
 
+import { asksForIgnoredTls } from '../../scripts/db/database-url.mjs';
 import { bounded } from '../common/concurrency/bounded.js';
 import { CHECK_TIMEOUT_MS } from '../common/dependency-checks.js';
 import { FixedTextError } from '../common/errors/fixed-text-error.js';
@@ -38,7 +39,7 @@ export const databaseEnv = {
  */
 function isUsableUrl(url: string): boolean {
   try {
-    if (new URL(url).searchParams.has('sslmode')) return false;
+    if (asksForIgnoredTls(url)) return false;
     void createPool({ uri: url }).end();
     return true;
   } catch {

@@ -135,9 +135,12 @@ pt_compose_name() {
 # pt_name_compose <file> <project>: name the project in the commands of a compose file's header.
 # The file sits in server/, which compose would take as the project name, so two projects on one
 # machine would share containers and volumes, and `down -v` would delete another project's data.
+# With -p compose sets COMPOSE_PROJECT_NAME itself, so the header stops asking for it.
 pt_name_compose() {
   compose_name="$(pt_compose_name "$2")"
-  sed -e "/^#/s|docker compose -f|docker compose -p $compose_name -f|" "$1" >"$1.named" || return 1
+  sed -e "/^#/s|docker compose -f|docker compose -p $compose_name -f|" \
+    -e 's|^# Needs \.env:.*|# Needs .env: copy .env.example. The -p below names the project for compose.|' \
+    -e '/^# unique on this machine, or compose refuses to start\.$/d' "$1" >"$1.named" || return 1
   mv "$1.named" "$1"
 }
 

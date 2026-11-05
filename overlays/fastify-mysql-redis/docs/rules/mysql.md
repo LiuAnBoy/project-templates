@@ -18,7 +18,7 @@ This code has no production history. Every claim on this page was run against a 
 ### TLS
 
 - Ask for TLS with the `ssl` key of the URL, whose value is JSON, URL-encoded: `?ssl=%7B%7D` connects over TLS and verifies the certificate against Node's trust store. Against the self-signed certificate of the `mysql:9` image that fails with `HANDSHAKE_SSL_ERROR`; `?ssl=%7B%22rejectUnauthorized%22%3Afalse%7D` connects over TLS without verifying it.
-- Never write `sslmode`. `mysql2` prints a warning that it ignores the key, and the connection stays in plain text (`Ssl_cipher` of the session was empty). The settings schema refuses a URL that carries it.
+- Never write `sslmode`. `mysql2` prints a warning that it ignores the key, and the connection stays in plain text (`Ssl_cipher` of the session was empty). The settings schema refuses a URL that carries it, and so do `db:migrate`, `db:status` and `db:pull`, with `invalid configuration: DATABASE_URL`.
 - `db:migrate` and `db:status` print the code of a failed handshake and no certificate text.
 
 ## Schema and migrations
@@ -122,6 +122,10 @@ async transfer(input: TransferInput): Promise<void> {
 }
 ```
 
+### Reading a large result inside a transaction
+
+`.iterator()` on a handle fails with a `TypeError`: Drizzle's iterator reads the driver's raw connection, and the handle exposes only its checked `query` and `execute`, so nothing can stream past the end of a transaction. Read in pages inside a `run`, or iterate on the pool client outside one.
+
 ### When the pool is busy or the server went silent
 
 - `mysql2` has a `queueLimit` that counts waiting calls and no acquire timeout, so with every connection held a further call waits for ever. The factory bounds that wait (5 seconds by default): the call fails with `mysql: no connection became free in time`, which answers 503, and a connection that frees up later is returned unused, so a call that gave up never runs its statement late.
@@ -166,5 +170,6 @@ export const orderItems = mysqlTable('order_items', {
 
 ## Logs
 
-- A failed statement is logged with its text and the code of the database error, and without its parameters. The message of a `mysql2` error under a statement quotes the value (`Duplicate entry '...' for key`, `Incorrect integer value: '...'`, `Incorrect datetime value: '...'`), so it is withheld for every code that starts with `ER_`: `ER_DUP_ENTRY`, `ER_TRUNCATED_WRONG_VALUE_FOR_FIELD` (SQLSTATE `HY000`, so the state cannot tell) and `ER_TRUNCATED_WRONG_VALUE` were logged with their codes and none of their values.
-- A refused login (`ER_ACCESS_DENIED_ERROR`), a database the user may not open (`ER_DBACCESS_DENIED_ERROR`, which is what the application's user gets for a database that does not exist), `ER_BAD_DB_ERROR` and `HANDSHAKE_SSL_ERROR` name the user, the host or the database in their messages, so they are logged with the code alone and answer 503.
+- A failed statement is logged with its text and the code of the database error, and without its parameters. The message of a `mysql2` error quotes a value (`Duplicate entry '...' for key`, `Incorrect integer value: '...'`, `Incorrect datetime value: '...'`) or names the user or the host, so it is withheld for every code that starts with `ER_`, with or without a statement above it: `ER_DUP_ENTRY`, `ER_TRUNCATED_WRONG_VALUE_FOR_FIELD` (SQLSTATE `HY000`, so the state cannot tell) and `ER_TRUNCATED_WRONG_VALUE` were logged with their codes and none of their values.
+- A refused login (`ER_ACCESS_DENIED_ERROR`), a database the user may not open (`ER_DBACCESS_DENIED_ERROR`, which is what the application's user gets for a database that does not exist), `ER_BAD_DB_ERROR` and `HANDSHAKE_SSL_ERROR` are logged with the code alone and answer 503, and these were run against a real server. So are `ER_HOST_NOT_PRIVILEGED`, `ER_HOST_IS_BLOCKED`, `ER_ACCOUNT_HAS_BEEN_LOCKED`, `ER_USER_LIMIT_REACHED`, `ER_TOO_MANY_USER_CONNECTIONS`, `ER_MUST_CHANGE_PASSWORD_LOGIN` and `ER_SERVER_OFFLINE_MODE`, by the classifier's test only: they need a server set up to refuse.
+- `db:pull` prints none of Drizzle Kit's output, because its report of a refused login can name the user and the host. `pnpm exec drizzle-kit pull` shows it when you need it.

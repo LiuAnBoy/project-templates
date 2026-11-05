@@ -13,7 +13,8 @@
  *   Their unused imports are dropped, because the project's lint refuses them, and
  *   they are formatted with the project's Prettier.
  *
- * Only for a project that has no migration yet.
+ * Only for a project that has no migration yet. Drizzle Kit's own output stays
+ * unprinted, because its report of a refused login can name the user and the host.
  */
 import { spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
@@ -21,10 +22,13 @@ import { readFile, rm, writeFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { asksForIgnoredTls, INVALID_DATABASE_URL } from './database-url.mjs';
 import { MIGRATIONS_FOLDER, readJournal } from './journal.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const SCHEMA_FOLDER = resolve(ROOT, 'src', 'db', 'schema');
+const PULL_FAILED =
+  'drizzle-kit pull wrote no migration. Check DATABASE_URL, that the server is running and that the database has tables; `pnpm exec drizzle-kit pull` shows its own output, which can name the host and the user.';
 const INTROSPECTION_HEADER =
   '-- Current sql file was generated after introspecting the database';
 const BASELINE_SQL = `-- Baseline adopted from an existing database by \`pnpm db:pull\`.
@@ -45,8 +49,8 @@ function runPull() {
   if (!existsSync(bin)) {
     throw new Error('drizzle-kit is not installed: run pnpm install first.');
   }
-  const result = spawnSync(bin, ['pull'], { cwd: ROOT, stdio: 'inherit' });
-  if (result.status !== 0) throw new Error('drizzle-kit pull failed.');
+  const result = spawnSync(bin, ['pull'], { cwd: ROOT, stdio: 'pipe' });
+  if (result.status !== 0) throw new Error(PULL_FAILED);
 }
 
 /**
@@ -137,16 +141,21 @@ async function moveIntoSchema(from, to, rewrite = (text) => text) {
  * Pulls the database and tidies what Drizzle Kit wrote.
  *
  * @returns {Promise<void>} Resolves when the project holds the adopted schema.
- * @throws {Error} When a migration already exists, or the pull fails.
+ * @throws {Error} When the setting asks for TLS the driver ignores, a migration already exists, or the pull fails.
  */
 async function main() {
+  if (asksForIgnoredTls(process.env.DATABASE_URL ?? '')) {
+    throw new Error(INVALID_DATABASE_URL);
+  }
   if ((await readJournal()).length > 0) {
     throw new Error(
       'drizzle/ already holds a migration: db:pull adopts a database once, at the start of a project.',
     );
   }
   runPull();
+  // Drizzle Kit exits 0 when it cannot connect, so what it wrote is the only proof.
   const entries = await readJournal();
+  if (entries.length === 0) throw new Error(PULL_FAILED);
   for (const entry of entries) {
     const file = resolve(MIGRATIONS_FOLDER, `${entry.tag}.sql`);
     const text = await readFile(file, 'utf8');

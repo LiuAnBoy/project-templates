@@ -284,10 +284,12 @@ describe('postgres database', () => {
     });
 
     it('keeps savepoints, the error of a kept savepoint handle and an ordinary rollback working', async () => {
+      let kept: DatabaseTransaction | undefined;
       await database.transactions.run(async (tx) => {
         await probe.insert(tx, 'outer-kept');
         await tx
           .transaction(async (inner) => {
+            kept = inner as DatabaseTransaction;
             await probe.insert(inner, 'inner-dropped');
             throw new Error('inner');
           })
@@ -296,6 +298,17 @@ describe('postgres database', () => {
 
       expect(await probe.exists(database.db, 'outer-kept')).toBe(true);
       expect(await probe.exists(database.db, 'inner-dropped')).toBe(false);
+      await expect(
+        probe.insert(kept as DatabaseTransaction, 'kept-savepoint'),
+      ).rejects.toBeInstanceOf(TransactionEndedError);
+
+      await expect(
+        database.transactions.run(async (tx) => {
+          await probe.insert(tx, 'rolled-back');
+          throw new Error('work failed');
+        }),
+      ).rejects.toThrow('work failed');
+      expect(await probe.exists(database.db, 'rolled-back')).toBe(false);
     });
 
     it('gives a run after the end its own connection, at once', async () => {

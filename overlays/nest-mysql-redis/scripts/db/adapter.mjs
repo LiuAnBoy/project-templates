@@ -7,6 +7,8 @@ import { drizzle } from 'drizzle-orm/mysql2';
 import { migrate } from 'drizzle-orm/mysql2/migrator';
 import { createPool } from 'mysql2/promise';
 
+import { asksForIgnoredTls, INVALID_DATABASE_URL } from './database-url.mjs';
+
 const MIGRATIONS_TABLE = '__drizzle_migrations';
 
 /** How long `close` waits for the pool before it gives up and lets the real error print. */
@@ -19,7 +21,7 @@ const CONNECT_TIMEOUT_MS = 10_000;
  * Opens the database named by `DATABASE_URL`.
  *
  * @returns {Promise<import('./runner.mjs').Store>} The store.
- * @throws {Error} When `DATABASE_URL` is not set.
+ * @throws {Error} When `DATABASE_URL` is not set, or asks for TLS with a key the driver ignores.
  */
 export async function openStore() {
   const url = process.env.DATABASE_URL;
@@ -28,6 +30,7 @@ export async function openStore() {
       'DATABASE_URL is required: copy .env.example to .env first.',
     );
   }
+  if (asksForIgnoredTls(url)) throw new Error(INVALID_DATABASE_URL);
   // One connection, so the migrator's transaction and its statements share it.
   const pool = createPool({
     uri: url,

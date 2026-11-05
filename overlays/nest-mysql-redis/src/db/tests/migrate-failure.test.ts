@@ -99,6 +99,25 @@ describe('what db:migrate prints for failures it recognises by code', () => {
         "Access denied for user 'u'@'%' to database 'canary-db'",
       ],
       ['ER_BAD_DB_ERROR', "Unknown database 'canary-db'"],
+      [
+        'ER_HOST_NOT_PRIVILEGED',
+        "Host 'canary-host' is not allowed to connect to this MySQL server",
+      ],
+      ['ER_HOST_IS_BLOCKED', "Host 'canary-host' is blocked"],
+      [
+        'ER_ACCOUNT_HAS_BEEN_LOCKED',
+        "Access denied for user 'canary-user'@'canary-host'. Account is locked.",
+      ],
+      ['ER_USER_LIMIT_REACHED', "User 'canary-user' has exceeded a limit"],
+      [
+        'ER_TOO_MANY_USER_CONNECTIONS',
+        "User canary-user already has more than 'max_user_connections'",
+      ],
+      [
+        'ER_MUST_CHANGE_PASSWORD_LOGIN',
+        'Your password has expired, canary-user.',
+      ],
+      ['ER_SERVER_OFFLINE_MODE', 'The server is in offline mode, canary-user.'],
       ['HANDSHAKE_SSL_ERROR', 'self-signed certificate in certificate chain'],
       [
         'PROTOCOL_CONNECTION_LOST',
@@ -112,6 +131,29 @@ describe('what db:migrate prints for failures it recognises by code', () => {
       expect(text).toContain('Cannot reach or open the database');
       expect(text).toContain(code);
       expect(text).not.toContain('canary');
+    }
+  });
+
+  it('prints only the code of an ER_* error no list names, with no statement above it', () => {
+    const text = describeMigrateFailure(
+      Object.assign(new Error("Refused 'canary-user'@'canary-host'"), {
+        code: 'ER_SOME_FUTURE_REFUSAL',
+      }),
+    );
+
+    expect(text).toContain('ER_SOME_FUTURE_REFUSAL');
+    expect(text).not.toContain('canary');
+  });
+
+  it('refuses a URL that asks for TLS with sslmode, before it connects', async () => {
+    process.env.DATABASE_URL =
+      'mysql://canary-user:canary-pw@127.0.0.1:1/canary-db?sslmode=required';
+    try {
+      await expect(openStore({ forMigrate: false })).rejects.toThrow(
+        'invalid configuration: DATABASE_URL',
+      );
+    } finally {
+      delete process.env.DATABASE_URL;
     }
   });
 

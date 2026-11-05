@@ -333,10 +333,12 @@ describe('mysql database', () => {
     });
 
     it('keeps savepoints, the error of a kept savepoint handle and an ordinary rollback working', async () => {
+      let kept: DatabaseTransaction | undefined;
       await database.transactions.run(async (tx) => {
         await probe.insert(tx, 'outer-kept');
         await tx
           .transaction(async (inner) => {
+            kept = inner as DatabaseTransaction;
             await probe.insert(inner, 'inner-dropped');
             throw new Error('inner');
           })
@@ -345,6 +347,32 @@ describe('mysql database', () => {
 
       expect(await probe.exists(database.db, 'outer-kept')).toBe(true);
       expect(await probe.exists(database.db, 'inner-dropped')).toBe(false);
+      await expect(
+        probe.insert(kept as DatabaseTransaction, 'kept-savepoint'),
+      ).rejects.toBeInstanceOf(TransactionEndedError);
+
+      await expect(
+        database.transactions.run(async (tx) => {
+          await probe.insert(tx, 'rolled-back');
+          throw new Error('work failed');
+        }),
+      ).rejects.toThrow('work failed');
+      expect(await probe.exists(database.db, 'rolled-back')).toBe(false);
+    });
+
+    it('fails an iterator inside a run with a TypeError, as the rules page says', async () => {
+      await database.transactions.run(async (tx) => {
+        const table = mysqlTable(randomTableName('iterator'), {
+          id: char('id', { length: 36 }),
+        });
+        const iterate = async (): Promise<void> => {
+          for await (const row of tx.select().from(table).iterator()) {
+            expect(row).toBeUndefined();
+          }
+        };
+
+        await expect(iterate()).rejects.toBeInstanceOf(TypeError);
+      });
     });
 
     it('returns the connection to the pool: a pool of one serves the next run at once', async () => {
