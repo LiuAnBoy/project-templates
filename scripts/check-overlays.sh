@@ -2,7 +2,7 @@
 # Verifies overlays the way a user applies them: from a codeload-shaped
 # archive, with the exact extraction commands of the README.
 #
-# Usage: scripts/check-overlays.sh [--static] <overlay>...
+# Usage: scripts/check-overlays.sh [--static | --docker] <overlay>...
 #        (for example next-antd vite-mui nest-postgres-redis)
 # For each overlay, in an empty temp directory:
 #   1. extract the base:    tar -xz --strip=2 project-templates-master/templates/<base>
@@ -18,6 +18,9 @@
 # others are covered by those and get the two static checks.
 # --static runs only check-template.sh and check-docs.mjs, for any overlay: no
 # process is started and no service is needed.
+# --docker extracts the same way and runs only check-docker.sh on the result, under
+# the overlay's own heading, so the result is named after the overlay. It cannot be
+# combined with --static.
 # Exit codes: 0 every check ran and passed; 1 a check failed; 2 usage; 3 a real-store
 # check could not run because Docker is absent, so the result is incomplete, never
 # a pass (a failure of another overlay still makes the exit 1).
@@ -27,20 +30,22 @@
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
 STATIC=0
+DOCKER=0
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --static) STATIC=1; shift ;;
+    --docker) DOCKER=1; shift ;;
     --) shift; break ;;
     -*)
-      echo "usage: scripts/check-overlays.sh [--static] <overlay>..." >&2
+      echo "usage: scripts/check-overlays.sh [--static | --docker] <overlay>..." >&2
       exit 2
       ;;
     *) break ;;
   esac
 done
 
-if [ "$#" -eq 0 ]; then
-  echo "usage: scripts/check-overlays.sh [--static] <overlay>..." >&2
+if [ "$#" -eq 0 ] || { [ "$STATIC" -eq 1 ] && [ "$DOCKER" -eq 1 ]; }; then
+  echo "usage: scripts/check-overlays.sh [--static | --docker] <overlay>..." >&2
   exit 2
 fi
 
@@ -98,6 +103,16 @@ check_one() {
     echo "FAIL $overlay: could not extract the overlay" >&2
     return 1
   }
+  if [ "$DOCKER" -eq 1 ]; then
+    named="$dir/$overlay"
+    mv "$project" "$named" || return 1
+    bash "$ROOT/scripts/check-docker.sh" "$named"
+    rc=$?
+    if [ "$rc" -ne 0 ]; then return "$rc"; fi
+    rm -rf "$dir"
+    echo "PASS $overlay"
+    return 0
+  fi
   bash "$ROOT/scripts/check-template.sh" "$project" || return 1
   if is_data_base "$base"; then
     node "$ROOT/scripts/check-docs.mjs" "$project" || return 1

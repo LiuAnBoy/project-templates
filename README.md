@@ -139,6 +139,22 @@ pnpm dev                                                 # FastAPI：make dev
 
 FastAPI 的資料庫程式碼有整合測試，但沒有正式環境的使用紀錄。
 
+## Docker
+
+三個後端範本（`nest`、`fastify`、`fastapi`）各附三個檔案：`Dockerfile`、`docker-compose.yml` 與 `.dockerignore`。映像分兩個階段建置：第一階段依鎖定檔安裝並建置，執行階段只複製建置結果與正式環境的相依套件，以 uid 1000 執行，不含 `.env`、測試與原始碼。
+
+啟動前先把 `.env.example` 複製成 `.env`，並替 `COMPOSE_PROJECT_NAME` 填一個在這台機器上不重複的名稱：
+
+```sh
+cp .env.example .env     # 先編輯 COMPOSE_PROJECT_NAME
+docker compose up -d --build --wait
+```
+
+- `COMPOSE_PROJECT_NAME` 是容器、網路與資料卷的名稱。留空時 compose 會失敗並指出這個變數，兩個專案因此不會共用容器或資料卷，`docker compose down -v` 也不會碰到別的專案。
+- 容器裡的伺服器固定聽 8000；`.env` 的 `PORT` 是本機 `127.0.0.1` 上對應的埠。祕密只透過 `env_file` 與 `environment` 在執行時傳入，不會進入映像。
+- 不使用 Docker 的專案刪掉這三個檔案即可。`AGENTS.md` 的 Docker 區塊與 `docs/rules/docker.md` 寫成「有這些檔案時」的規則，刪除之後仍然成立。
+- 維護範本時，`bash scripts/check-docker.sh fastify nest fastapi` 會建置映像、在容器裡驗證，並檢查映像沒有祕密、不是以 root 執行；它用 28000 等移動過的埠，不占用其他檢查的埠。沒有 Docker 時結束碼是 3，表示未完成，不是通過。
+
 ## 修改範本
 
 `templates/` 與 `overlays/` 是產生出來的，並且提交進 repo；不要手改，手改會在下次 render 被覆蓋，`render.mjs --check` 也會失敗。

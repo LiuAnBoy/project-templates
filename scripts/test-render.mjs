@@ -1005,7 +1005,54 @@ test('guard: a server store ships compose.server.fragment.yml, and a Docker laye
     buildDockerLive({ named: ['fastify', 'next-heroui'], frameworks: ['nest', 'fastapi'], stores: ['postgres', 'sqlite'] }),
     ['fastify', 'next-heroui', 'nest-postgres-redis', 'nest-sqlite', 'fastapi-postgres-redis', 'fastapi-sqlite'],
   );
-  assert.deepEqual(DOCKER_LIVE, []);
+  assert.deepEqual(DOCKER_LIVE, ['fastify']);
+});
+
+test('guard on real output: every Dockerfile, compose file and .dockerignore of templates/ and overlays/ obeys the Docker rules', async () => {
+  const { checkBuildArgs, checkDockerignore, checkNodeMajor, checkOneServices } = await import(
+    new URL('./docker-blocks.mjs', import.meta.url).href,
+  );
+  const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+  const problems = [];
+  let seen = 0;
+  for (const group of ['templates', 'overlays']) {
+    for (const name of fs.readdirSync(path.join(root, group))) {
+      const dir = path.join(root, group, name);
+      for (const file of fs.readdirSync(dir)) {
+        const rel = `${group}/${name}/${file}`;
+        const text = () => fs.readFileSync(path.join(dir, file), 'utf8');
+        if (file === 'Dockerfile') {
+          seen += 1;
+          problems.push(...checkBuildArgs(text(), rel));
+          const nvmrc = path.join(dir, '.nvmrc');
+          if (fs.existsSync(nvmrc)) problems.push(...checkNodeMajor(text(), fs.readFileSync(nvmrc, 'utf8'), rel));
+        } else if (/^docker-compose(\..+)?\.yml$/.test(file)) {
+          problems.push(...checkOneServices(text(), rel));
+          if (file === 'docker-compose.yml') {
+            seen += 1;
+            problems.push(...checkBuildArgs(text(), rel));
+          }
+        } else if (file === '.dockerignore') {
+          seen += 1;
+          problems.push(...checkDockerignore(text(), rel));
+        }
+      }
+    }
+  }
+  assert.deepEqual(problems, []);
+  // The scan must have found the files it guards: a renamed or moved file cannot silently empty it.
+  assert.ok(seen >= 9, `the scan found ${seen} Docker files, expected at least 9`);
+});
+
+test('guard on real output: the guards report a secret argument, a missing ignore pattern and a drifted Node major', async () => {
+  const { checkBuildArgs, checkDockerignore, checkNodeMajor } = await import(new URL('./docker-blocks.mjs', import.meta.url).href);
+  const real = fs.readFileSync(new URL('../templates/fastify/Dockerfile', import.meta.url), 'utf8');
+  assert.deepEqual(checkBuildArgs(real, 'real'), []);
+  assert.equal(checkBuildArgs(`${real}ARG NPM_TOKEN\n`, 'real').length, 1);
+  const ignore = fs.readFileSync(new URL('../templates/fastify/.dockerignore', import.meta.url), 'utf8');
+  assert.deepEqual(checkDockerignore(ignore, 'real'), []);
+  assert.equal(checkDockerignore(ignore.replace('**/.env\n', ''), 'real').length, 1);
+  assert.equal(checkNodeMajor(real, '22\n', 'real').length, 2);
 });
 
 let failed = 0;

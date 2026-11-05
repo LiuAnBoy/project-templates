@@ -1,0 +1,61 @@
+# The whole project in containers: the server image built from the Dockerfile
+# in this directory, and the services it needs.
+# Needs .env: copy .env.example and give COMPOSE_PROJECT_NAME a value that is
+# unique on this machine, or compose refuses to start.
+# Start:               docker compose up -d --build --wait
+# Stop:                docker compose down
+# Stop and drop data:  docker compose down -v
+
+name: ${COMPOSE_PROJECT_NAME:?set COMPOSE_PROJECT_NAME in .env}
+
+services:
+  server:
+    build: .
+    env_file: .env
+    environment:
+      HOST: 0.0.0.0
+      PORT: '8000'
+      NODE_ENV: production
+      TRUST_PROXY: ${TRUST_PROXY:-}
+    ports:
+      - '127.0.0.1:${PORT:-8000}:8000'
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - fetch('http://127.0.0.1:8000/api/health').then((r) => process.exit(Number(r.status !== 200)), () => process.exit(1))
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
+    restart: unless-stopped
+  postgres:
+    image: postgres:18-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DATABASE:-app}
+      POSTGRES_USER: ${POSTGRES_USER:-app}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-dev-only-postgres-pw-9f3a}
+    ports:
+      - '127.0.0.1:${POSTGRES_PORT:-5432}:5432'
+    volumes:
+      - postgres-data:/var/lib/postgresql
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"']
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    restart: unless-stopped
+  redis:
+    image: redis:8-alpine
+    ports:
+      - '127.0.0.1:${REDIS_PORT:-6379}:6379'
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    restart: unless-stopped
+
+volumes:
+  postgres-data:

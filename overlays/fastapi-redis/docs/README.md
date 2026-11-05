@@ -64,6 +64,14 @@ FastAPI、Python 3.12 以上、pydantic 2、pydantic-settings、loguru、pytest�
 | [`rules/extending.md`](rules/extending.md)           | 擴充方式：port、工廠函式與 registry |
 | [`rules/docs-to-update.md`](rules/docs-to-update.md) | 變更時要更新哪些文件                |
 
+## Docker
+
+專案附有 `Dockerfile`、`docker-compose.yml` 與 `.dockerignore`；啟動前先把 `.env.example` 複製成 `.env`，並替 `COMPOSE_PROJECT_NAME` 填一個在這台機器上不重複的名稱。映像與容器的規則見 `rules/docker.md`。
+
+| 頁面                                 | 內容                                |
+| ------------------------------------ | ----------------------------------- |
+| [`rules/docker.md`](rules/docker.md) | 映像、compose、機密與非 root 的規則 |
+
 ## Redis
 
 連線設定在 `.env`：伺服器只讀 `REDIS_URL`（必填，缺少時拒絕啟動並指出變數名稱）；`REDIS_PORT` 供 `docker-compose.dev.yml` 啟動開發用的 Redis，換到共用的伺服器時只改 `.env`。啟動時 Redis 連不上，伺服器不會啟動，只指出依賴的名稱，不印出網址；啟動之後 Redis 失聯，健康檢查與速率限制回 503，行程不會結束。

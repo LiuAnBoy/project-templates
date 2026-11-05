@@ -67,6 +67,14 @@ Fastify 5、TypeScript 6、zod 4（fastify-type-provider-zod）、pino、dayjs�
 | [`rules/extending.md`](rules/extending.md)           | 擴充方式：port、工廠函式與 registry |
 | [`rules/docs-to-update.md`](rules/docs-to-update.md) | 變更時要更新哪些文件                |
 
+## Docker
+
+專案附有 `Dockerfile`、`docker-compose.yml` 與 `.dockerignore`；啟動前先把 `.env.example` 複製成 `.env`，並替 `COMPOSE_PROJECT_NAME` 填一個在這台機器上不重複的名稱。映像與容器的規則見 `rules/docker.md`。
+
+| 頁面                                 | 內容                                |
+| ------------------------------------ | ----------------------------------- |
+| [`rules/docker.md`](rules/docker.md) | 映像、compose、機密與非 root 的規則 |
+
 ## SQLite
 
 資料庫檔案的路徑由 `.env` 的 `DATABASE_URL` 指定（相對於伺服器啟動時的目錄），必填，缺少時拒絕啟動並指出變數名稱。檔案必須已經存在：只有 migration 會建立它，路徑錯誤時啟動失敗，不會悄悄建出空資料庫。資料庫檔案放在 `data/`，該資料夾自帶 `.gitignore`，檔案不會被提交。

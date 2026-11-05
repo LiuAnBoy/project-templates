@@ -17,6 +17,7 @@
  *   server/<name>         framework layer of one backend (nest, fastify, fastapi)
  *   workspace             the monorepo root with the contract package
  *   workspace-no-contract the root of a monorepo whose server is not a Node project
+ *   docker/main           the Docker block every backend ships (.dockerignore, rules, env lines)
  *   data/compose          the main compose block of a data overlay with a server store
  *   data/integration/<fw> integration test config of one backend
  *   data/sql/<node|fastapi>  what every SQL store shares on that platform
@@ -53,9 +54,23 @@ for (const framework of WEB_FRAMEWORKS) {
 }
 
 // The empty-store block comes last in a base and is left out of every data overlay.
-recipes.nest = ['source/server/common', 'source/server/node', 'source/server/nest', 'source/data/none'];
-recipes.fastify = ['source/server/common', 'source/server/node', 'source/server/fastify', 'source/data/none'];
-recipes.fastapi = ['source/server/common', 'source/server/fastapi', 'source/data/none'];
+// The Docker main block follows the framework's layers, so its text joins after the
+// framework's H1 and block, and precedes the empty-store block.
+recipes.nest = [
+  'source/server/common',
+  'source/server/node',
+  'source/server/nest',
+  'source/docker/main',
+  'source/data/none',
+];
+recipes.fastify = [
+  'source/server/common',
+  'source/server/node',
+  'source/server/fastify',
+  'source/docker/main',
+  'source/data/none',
+];
+recipes.fastapi = ['source/server/common', 'source/server/fastapi', 'source/docker/main', 'source/data/none'];
 recipes.workspace = ['source/workspace'];
 
 /**
@@ -286,8 +301,13 @@ export function uncoveredDockerLayers(targets, live, dockerLayers) {
   return [...problems, ...[...dockerLayers].filter((layer) => !covered.has(layer)).sort()];
 }
 
-/** @type {string[]} The targets that run as images; none ships a Docker file yet. */
-export const DOCKER_LIVE = [];
+/**
+ * The targets that run as images. A later phase adds every layer that holds a
+ * Docker fragment to a target here; `test-render.mjs` fails when one is in none.
+ *
+ * @type {string[]}
+ */
+export const DOCKER_LIVE = ['fastify'];
 
 Object.assign(overlays, dataOverlays);
 
