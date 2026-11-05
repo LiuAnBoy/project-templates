@@ -41,8 +41,26 @@
 #      sentinel, which proves the check can see it, and `web` and `dashboard`,
 #      which read no `env_file`, do not (their whole environment is read, and
 #      must hold PATH, so an empty read is never an absence).
+#   6. Stores (a project with a `migrate` service or a store service). `migrate`
+#      ran a migration the script plants in the copy and exited 0: PostgreSQL
+#      holds its table, and on SQLite the file belongs to uid 1000 in the named
+#      volume, whose top-level declaration `config` lists, and `server` still
+#      answers after a restart. `server` and `migrate` see an empty superuser
+#      password and an empty TEST_* URL. With each store service stopped in turn,
+#      `run --no-deps server` exits non-zero within STORE_BOUND, names the store
+#      and prints no password, URL or host:port. With the PostgreSQL password
+#      changed behind the volume, `up` exits non-zero, `migrate` prints no user,
+#      database, host or password, and `server` stays `created`.
+#   7. The switch (a project with docker-compose.postgres-cluster.yml): a
+#      throwaway network and PostgreSQL, named from the project name. Only the
+#      four .env lines COMPOSE_FILE, POSTGRES_DOCKER_NETWORK, DATABASE_URL and
+#      POSTGRES_DATABASE change; a blank network is refused naming the variable;
+#      every other file keeps its checksum; `up --wait` passes with no local
+#      `postgres` container, health and hello pass, and `migrate`'s table is in
+#      the throwaway database; restoring .env brings the local service back.
 # A trap runs `down -v --rmi local` for the project, removes the build-stage
-# image by name and stops the stub, and nothing else.
+# image, the throwaway container and the throwaway network by name and stops the
+# stub, and nothing else.
 #
 # What the script assumes of a project (the contract its files meet):
 #   - `.env.example` lines are NAME=value, COMPOSE_PROJECT_NAME is one of them
@@ -52,6 +70,13 @@
 #     GET /api/health on its own port 8000, or no `server` and a service `web`
 #     that answers GET / and publishes `WEB_PORT`; it names no `container_name`.
 #   - A web service reads no `env_file`.
+#   - A project with a database store has a `migrate` service (the server's image
+#     with its own command) that `server` waits on, and either a `postgres`
+#     service whose URL compose builds for `server` and `migrate`, or a named
+#     volume `sqlite-data` mounted at /app/data. `POSTGRES_USER` and
+#     `POSTGRES_DATABASE` are `.env` lines; this script gives them unique values.
+#     A Node project keeps its migrations in `drizzle/` (with `meta/_journal.json`),
+#     a Python project in `alembic/versions/`.
 #   - A Python project has a `pyproject.toml`; anything else is a Node project.
 #
 # Exit codes: 0 every target ran and passed; 1 a target failed; 2 usage; 3 Docker
@@ -59,8 +84,9 @@
 # pass (a failure of another target still makes the exit 1).
 # Needs node on the PATH when the project is a Vite web base (the stub).
 # Environment: BUILD_BOUND (seconds for a build, default 900), UP_BOUND (seconds
-# for `up --wait`, default 300), DOCKER_BOUND (seconds for any other Docker
-# command, default 60).
+# for `up --wait`, default 300), STORE_BOUND (seconds a server gets to exit with a
+# store down, default 30), DOCKER_BOUND (seconds for any other Docker command,
+# default 60).
 # Needs network access for package installs; base images must already be local
 # or pullable, and no build passes --pull.
 
@@ -68,6 +94,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 BUILD_BOUND="${BUILD_BOUND:-900}"
 UP_BOUND="${UP_BOUND:-300}"
 DOCKER_BOUND="${DOCKER_BOUND:-60}"
+STORE_BOUND="${STORE_BOUND:-30}"
 PORT_SHIFT=20000
 HELLO_BODY='{"success":true,"payload":{"data":{"message":"hello world!!"}}}'
 HEALTH_BODY='{"status":"ok"}'
@@ -87,6 +114,8 @@ STARTED=0
 COUNTER=0
 BUILD_IMAGE=""
 STUB_PID=""
+SW_NET=""
+SW_PG=""
 
 # kill_tree <signal> <pid>: send a signal to a process and all its descendants.
 kill_tree() {
@@ -140,6 +169,12 @@ dc() {
   (cd "$PROJ" && run_bound "$limit" docker compose "$@")
 }
 
+# compose_here <compose args...>: run `docker compose` in the project, with no bound
+# of its own; read_checked supplies one.
+compose_here() {
+  (cd "$PROJ" && docker compose "$@")
+}
+
 # docker_ready: succeed when a docker binary exists and its daemon answers in time.
 docker_ready() {
   local i info_pid
@@ -178,12 +213,31 @@ env_value() {
 
 # teardown: remove everything the current target started, by name.
 teardown() {
+  local leftover
   if [ -n "$WORK" ] && [ -d "$WORK" ]; then
     if [ "$STARTED" -eq 1 ] && [ -d "$PROJ" ]; then
+      # A run that stopped inside the switch still has the cluster .env: restore the local one first.
+      [ -f "$WORK/env.local" ] && cp "$WORK/env.local" "$PROJ/.env"
       (cd "$PROJ" && run_bound "$DOCKER_BOUND" docker compose -p "$PROJECT" down -v --rmi local >/dev/null 2>&1)
     fi
     if [ -n "$BUILD_IMAGE" ]; then
       run_bound "$DOCKER_BOUND" docker rmi -f "$BUILD_IMAGE" >/dev/null 2>&1
+    fi
+    if [ "$STARTED" -eq 1 ]; then
+      # `down --rmi local` removes nothing once the project has no container (the
+      # run stopped it before a failure), so its images and network go by their label.
+      leftover="$(run_bound "$DOCKER_BOUND" docker images -q --filter "label=com.docker.compose.project=$PROJECT" 2>/dev/null)"
+      # shellcheck disable=SC2086
+      [ -n "$leftover" ] && run_bound "$DOCKER_BOUND" docker rmi -f $leftover >/dev/null 2>&1
+      leftover="$(run_bound "$DOCKER_BOUND" docker network ls -q --filter "label=com.docker.compose.project=$PROJECT" 2>/dev/null)"
+      # shellcheck disable=SC2086
+      [ -n "$leftover" ] && run_bound "$DOCKER_BOUND" docker network rm $leftover >/dev/null 2>&1
+    fi
+    if [ -n "$SW_PG" ]; then
+      run_bound "$DOCKER_BOUND" docker rm -f -v "$SW_PG" >/dev/null 2>&1
+    fi
+    if [ -n "$SW_NET" ]; then
+      run_bound "$DOCKER_BOUND" docker network rm "$SW_NET" >/dev/null 2>&1
     fi
     if [ -n "$STUB_PID" ]; then
       kill "$STUB_PID" 2>/dev/null
@@ -196,6 +250,8 @@ teardown() {
   STARTED=0
   BUILD_IMAGE=""
   STUB_PID=""
+  SW_NET=""
+  SW_PG=""
 }
 trap teardown EXIT
 trap 'exit 130' INT TERM
@@ -255,6 +311,57 @@ write_env() {
   mkdir -p "$PROJ/todos" "$PROJ/node_modules"
   printf '%s\n' "$SENTINEL" >"$PROJ/todos/ptcheck-sentinel.txt"
   printf '%s\n' "$SENTINEL" >"$PROJ/node_modules/ptcheck-sentinel.txt"
+  # Unique store names, so a leak of the user or the database name is recognisable.
+  if grep -q '^POSTGRES_USER=' "$PROJ/.env"; then
+    set_env POSTGRES_USER "ptu${RANDOM}x"
+    set_env POSTGRES_DATABASE "ptd${RANDOM}x"
+  fi
+  plant_migration
+}
+
+# set_env <name> <value>: replace the NAME= line of .env in place. The value goes
+# through the environment, so no character of it is read as an escape.
+set_env() {
+  SET_VALUE="$2" awk -v name="$1" '
+    index($0, name "=") == 1 { print name "=" ENVIRON["SET_VALUE"]; next }
+    { print }
+  ' "$PROJ/.env" >"$PROJ/.env.next" && mv "$PROJ/.env.next" "$PROJ/.env"
+}
+
+# plant_migration: give the copy one migration that creates the table ptcheck_probe,
+# so what `migrate` did can be read back. Node: drizzle/ and its journal; Python:
+# alembic/versions/. A project with neither has no migrate service.
+plant_migration() {
+  if [ -f "$PROJ/scripts/db/migrate.mjs" ] && [ -f "$PROJ/drizzle/meta/_journal.json" ]; then
+    printf 'CREATE TABLE ptcheck_probe (id integer);\n' >"$PROJ/drizzle/0000_ptcheck_probe.sql"
+    node -e "
+      const fs = require('fs');
+      const file = process.argv[1];
+      const journal = JSON.parse(fs.readFileSync(file, 'utf8'));
+      journal.entries.push({ idx: 0, version: journal.version, when: 1730000000000, tag: '0000_ptcheck_probe', breakpoints: true });
+      fs.writeFileSync(file, JSON.stringify(journal, null, 2) + '\n');
+    " "$PROJ/drizzle/meta/_journal.json" || return 1
+  elif [ -f "$PROJ/scripts/db_migrate.py" ] && [ -d "$PROJ/alembic/versions" ]; then
+    cat >"$PROJ/alembic/versions/20250101_0000_ptcheck0001_probe.py" <<'PYMIG'
+"""Probe migration planted by check-docker.sh."""
+
+import sqlalchemy as sa
+from alembic import op
+
+revision = "ptcheck0001"
+down_revision = None
+branch_labels = None
+depends_on = None
+
+
+def upgrade() -> None:
+    op.create_table("ptcheck_probe", sa.Column("id", sa.Integer()))
+
+
+def downgrade() -> None:
+    op.drop_table("ptcheck_probe")
+PYMIG
+  fi
 }
 
 # set_project_name <name>: set COMPOSE_PROJECT_NAME in .env.
@@ -584,7 +691,7 @@ check_runtime_env() {
     if [ -n "$ids" ]; then
       # Read the whole environment: a failed exec must not look like an absent variable.
       read_checked "$WORK/printenv.out" "the environment of $svc" \
-        docker compose -p "$PROJECT" --project-directory "$PROJ" exec -T "$svc" printenv || return 1
+        compose_here exec -T "$svc" printenv || return 1
       if ! grep -q '^PATH=' "$WORK/printenv.out"; then
         fail "the environment read of $svc holds no PATH, so it proves nothing"
         return 1
@@ -596,6 +703,310 @@ check_runtime_env() {
       say "$LABEL: $svc does not see the sentinel"
     fi
   done
+}
+
+# container_state <service>: print "<status> <exit code>" of the service's container
+# (exited ones included), or fail when it has none or the read fails.
+container_state() {
+  local id
+  id="$(dc "$DOCKER_BOUND" ps -a -q "$1" 2>/dev/null)" || return 1
+  [ -n "$id" ] || return 1
+  dk "$DOCKER_BOUND" inspect -f '{{.State.Status}} {{.State.ExitCode}}' "$id" 2>/dev/null
+}
+
+# wait_stack: bring the project up again and wait for every service to be healthy.
+wait_stack() {
+  if ! dc "$UP_BOUND" up -d --wait >"$WORK/wait.out" 2>&1; then
+    tail -n 30 "$WORK/wait.out" >&2
+    fail "docker compose up --wait failed ($1)"
+    return 1
+  fi
+}
+
+# check_store_env: server and migrate carry no superuser password and no TEST_* URL
+# of their stores from .env, and each of them still holds the variable (empty), so
+# a missing blanking shows as a different line.
+check_store_env() {
+  local svc name
+  has_service migrate || return 0
+  grep -q '^POSTGRES_PASSWORD=' "$PROJ/.env" || return 0
+  for svc in server migrate; do
+    if [ "$svc" = server ]; then
+      read_checked "$WORK/svcenv.out" "the environment of server" \
+        compose_here exec -T server printenv || return 1
+    else
+      read_checked "$WORK/svcenv.out" "the environment of migrate" \
+        compose_here run --rm --no-deps -T migrate printenv || return 1
+    fi
+    grep -q '^PATH=' "$WORK/svcenv.out" || { fail "the environment read of $svc holds no PATH"; return 1; }
+    for name in POSTGRES_PASSWORD TEST_DATABASE_URL TEST_REDIS_URL; do
+      grep -q "^$name=" "$PROJ/.env" || continue
+      # migrate reaches no Redis, and a Redis-only project has no migrate service.
+      [ "$svc" = migrate ] && [ "$name" = TEST_REDIS_URL ] && continue
+      if ! grep -q -x "$name=" "$WORK/svcenv.out"; then
+        fail "$svc does not carry an empty $name"
+        return 1
+      fi
+    done
+  done
+  say "$LABEL: server and migrate carry an empty superuser password and empty TEST_* URLs"
+}
+
+# check_migrated: migrate exited 0 and its work is in the store.
+check_migrated() {
+  local state user db seen owner restarted
+  has_service migrate || return 0
+  state="$(container_state migrate)" || { fail "migrate left no container to read"; return 1; }
+  if [ "$state" != "exited 0" ]; then
+    fail "migrate is '$state', expected 'exited 0'"
+    return 1
+  fi
+  if has_service postgres; then
+    user="$(env_value "$PROJ/.env" POSTGRES_USER)"
+    db="$(env_value "$PROJ/.env" POSTGRES_DATABASE)"
+    read_checked "$WORK/probe.out" "the migrated table in postgres" \
+      compose_here exec -T postgres \
+      psql -U "$user" -d "$db" -tAc "select to_regclass('public.ptcheck_probe') is not null" || return 1
+    if [ "$(tr -d '[:space:]' <"$WORK/probe.out")" != "t" ]; then
+      fail "migrate exited 0 but the planted migration is not in the database"
+      return 1
+    fi
+    say "$LABEL: migrate exited 0 and its table is in the database"
+    return 0
+  fi
+  if ! grep -q '^  sqlite-data:' "$PROJ/docker-compose.yml"; then
+    fail "the named volume sqlite-data has no top-level declaration"
+    return 1
+  fi
+  read_checked "$WORK/volumes.out" "the volumes of the compose file" \
+    compose_here config --volumes || return 1
+  grep -q -x 'sqlite-data' "$WORK/volumes.out" || { fail "config lists no volume sqlite-data"; return 1; }
+  owner="$(service_exec server stat -c '%u' /app/data/app.db 2>/dev/null | tr -d '\r')"
+  if [ "$owner" != "1000" ]; then
+    fail "the database file belongs to uid '$owner', expected 1000 (created by migrate)"
+    return 1
+  fi
+  say "$LABEL: migrate exited 0 and created the database file as uid 1000 in the named volume"
+  restarted="$WORK/restart.out"
+  if ! dc "$DOCKER_BOUND" restart server >"$restarted" 2>&1; then
+    cat "$restarted" >&2
+    fail "could not restart server"
+    return 1
+  fi
+  wait_stack "after restarting server" || return 1
+  seen="$(read_health 2>/dev/null)"
+  if [ "$seen" != "$HEALTH_BODY" ]; then
+    fail "after a restart, /api/health answered '$seen', expected '$HEALTH_BODY'"
+    return 1
+  fi
+  say "$LABEL: server reads the database file again after a restart"
+}
+
+# store_down <service>: stop one store, run server once without its dependencies, and
+# judge its output; then bring the project back.
+store_down() {
+  local svc out rc password
+  svc="$1"
+  out="$WORK/down-$svc.out"
+  if ! dc "$DOCKER_BOUND" stop "$svc" >/dev/null 2>&1; then
+    fail "could not stop $svc"
+    return 1
+  fi
+  dc "$STORE_BOUND" run --rm --no-deps -T server >"$out" 2>&1
+  rc=$?
+  if [ "$rc" -eq 0 ] || [ "$rc" -eq 124 ]; then
+    cat "$out" >&2
+    fail "with $svc stopped, server exited $rc instead of failing within ${STORE_BOUND}s"
+    return 1
+  fi
+  if ! grep -q -i "$svc" "$out"; then
+    cat "$out" >&2
+    fail "with $svc stopped, the startup failure did not name it"
+    return 1
+  fi
+  password="$(env_value "$PROJ/.env" POSTGRES_PASSWORD)"
+  if [ -n "$password" ] && grep -q -F -- "$password" "$out"; then
+    fail "with $svc stopped, the startup failure printed the password"
+    return 1
+  fi
+  if grep -q -F '://' "$out" || grep -q -E "$svc:[0-9]+" "$out"; then
+    cat "$out" >&2
+    fail "with $svc stopped, the startup failure printed a URL or a host and port"
+    return 1
+  fi
+  say "$LABEL: with $svc stopped, server exits $rc within the bound, names it, and prints no password, URL or host"
+  wait_stack "after starting $svc again"
+}
+
+# check_stores_down: each store service stopped in turn.
+check_stores_down() {
+  local svc
+  for svc in postgres redis; do
+    has_service "$svc" || continue
+    store_down "$svc" || return 1
+  done
+}
+
+# check_migrate_failure: with the PostgreSQL password changed behind its volume,
+# migrate fails, server is never started, `up` is non-zero, and migrate's output
+# holds no user, database, host or password.
+check_migrate_failure() {
+  local out rc user db password state secret
+  has_service postgres || return 0
+  has_service migrate || return 0
+  user="$(env_value "$PROJ/.env" POSTGRES_USER)"
+  db="$(env_value "$PROJ/.env" POSTGRES_DATABASE)"
+  password="$(env_value "$PROJ/.env" POSTGRES_PASSWORD)"
+  dc "$DOCKER_BOUND" down >/dev/null 2>&1 || { fail "could not stop the project"; return 1; }
+  set_env POSTGRES_PASSWORD "ptwrongpw${RANDOM}"
+  out="$WORK/migrate-fail.out"
+  dc "$UP_BOUND" up -d --wait >"$out" 2>&1
+  rc=$?
+  dc "$DOCKER_BOUND" logs migrate >>"$out" 2>&1
+  if [ "$rc" -eq 0 ] || [ "$rc" -eq 124 ]; then
+    cat "$out" >&2
+    fail "up exited $rc although migrate could not log in"
+    return 1
+  fi
+  state="$(container_state server)" || state="absent"
+  case "$state" in
+    "created 0" | absent) ;;
+    *)
+      fail "server is '$state' after a failed migrate, expected it unstarted"
+      return 1
+      ;;
+  esac
+  if ! grep -q -i 'migrate' "$out"; then
+    fail "the failed up did not name migrate"
+    return 1
+  fi
+  state="$(container_state migrate)" || { fail "migrate left no container to read"; return 1; }
+  case "$state" in
+    "exited 0" | "running "*)
+      fail "migrate is '$state' although the password was wrong"
+      return 1
+      ;;
+  esac
+  dc "$DOCKER_BOUND" logs migrate >"$WORK/migrate.log" 2>&1
+  if [ ! -s "$WORK/migrate.log" ]; then
+    fail "migrate printed nothing when it failed"
+    return 1
+  fi
+  for secret in "$user" "$db" "$password" "postgres:5432" "@postgres" "://"; do
+    if grep -q -F -- "$secret" "$WORK/migrate.log"; then
+      cat "$WORK/migrate.log" >&2
+      fail "migrate's output holds '$secret'"
+      return 1
+    fi
+  done
+  say "$LABEL: a failing migrate leaves server unstarted, up exits $rc, and the output holds no host, user, database or password"
+  set_env POSTGRES_PASSWORD "$password"
+}
+
+# switch_wait_ready: wait until the throwaway PostgreSQL answers over TCP (the
+# temporary server of the image's first start listens on a socket only).
+switch_wait_ready() {
+  local i
+  i=0
+  while [ "$i" -lt 60 ]; do
+    if run_bound "$DOCKER_BOUND" docker exec "$SW_PG" psql -h 127.0.0.1 -U ptswu -d ptswdb -tAc 'select 1' >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 1
+    i=$((i + 1))
+  done
+  fail "the throwaway PostgreSQL did not become ready"
+  return 1
+}
+
+# checksums <file>: write a sorted checksum list of every file of the project but .env.
+checksums() {
+  (cd "$PROJ" && find . -type f ! -name .env ! -name .env.next -print | sort | while IFS= read -r f; do
+    cksum "$f"
+  done) >"$1"
+}
+
+# containers_of <service>: print the ids of the project's containers of a service,
+# exited ones included. Fails when the read fails; prints nothing when there are none.
+containers_of() {
+  run_bound "$DOCKER_BOUND" docker ps -a -q \
+    --filter "label=com.docker.compose.project=$PROJECT" --filter "label=com.docker.compose.service=$1"
+}
+
+# check_switch: the cluster switch by .env alone.
+check_switch() {
+  local out ids probe
+  [ -f "$PROJ/docker-compose.postgres-cluster.yml" ] || return 0
+  SW_NET="${PROJECT}swnet"
+  SW_PG="${PROJECT}swpg"
+  if ! run_bound "$DOCKER_BOUND" docker network create "$SW_NET" >"$WORK/sw.out" 2>&1; then
+    cat "$WORK/sw.out" >&2
+    fail "could not create the throwaway network"
+    return 1
+  fi
+  if ! run_bound "$DOCKER_BOUND" docker run -d --name "$SW_PG" --network "$SW_NET" \
+    -e POSTGRES_USER=ptswu -e POSTGRES_PASSWORD=ptswpw -e POSTGRES_DB=ptswdb postgres:18-alpine >"$WORK/sw.out" 2>&1; then
+    cat "$WORK/sw.out" >&2
+    fail "could not start the throwaway PostgreSQL"
+    return 1
+  fi
+  switch_wait_ready || return 1
+  dc "$DOCKER_BOUND" down >/dev/null 2>&1 || { fail "could not stop the project before the switch"; return 1; }
+  cp "$PROJ/.env" "$WORK/env.local"
+  checksums "$WORK/sum.before" || { fail "could not checksum the project"; return 1; }
+  set_env COMPOSE_FILE "docker-compose.yml:docker-compose.postgres-cluster.yml"
+  set_env DATABASE_URL "postgresql://ptswu:ptswpw@$SW_PG:5432/ptswdb"
+  set_env POSTGRES_DATABASE "ptswdb"
+  out="$WORK/blank-net.out"
+  if dc "$DOCKER_BOUND" config -q >"$out" 2>&1; then
+    fail "a blank POSTGRES_DOCKER_NETWORK was accepted with the cluster file"
+    return 1
+  fi
+  if ! grep -q 'POSTGRES_DOCKER_NETWORK' "$out"; then
+    head -n 5 "$out" >&2
+    fail "a blank POSTGRES_DOCKER_NETWORK failed without naming the variable"
+    return 1
+  fi
+  say "$LABEL: a blank POSTGRES_DOCKER_NETWORK is refused, naming the variable"
+  set_env POSTGRES_DOCKER_NETWORK "$SW_NET"
+  if [ "$(diff <(grep -v -E '^(COMPOSE_FILE|POSTGRES_DOCKER_NETWORK|DATABASE_URL|POSTGRES_DATABASE)=' "$WORK/env.local") \
+    <(grep -v -E '^(COMPOSE_FILE|POSTGRES_DOCKER_NETWORK|DATABASE_URL|POSTGRES_DATABASE)=' "$PROJ/.env") | wc -l | tr -d ' ')" != "0" ]; then
+    fail "the switch changed an .env line other than the four"
+    return 1
+  fi
+  checksums "$WORK/sum.after" || { fail "could not checksum the project"; return 1; }
+  if ! cmp -s "$WORK/sum.before" "$WORK/sum.after"; then
+    fail "the switch changed a file other than .env"
+    return 1
+  fi
+  say "$LABEL: the switch changes four .env lines and no other file"
+  wait_stack "on the cluster" || return 1
+  ids="$(containers_of postgres)" || { fail "could not list the postgres containers"; return 1; }
+  if [ -n "$ids" ]; then
+    fail "a local postgres container exists on the cluster"
+    return 1
+  fi
+  say "$LABEL: no local postgres container exists on the cluster"
+  check_running || return 1
+  read_checked "$WORK/probe.out" "the migrated table in the throwaway database" \
+    docker exec "$SW_PG" psql -U ptswu -d ptswdb -tAc "select to_regclass('public.ptcheck_probe') is not null" || return 1
+  probe="$(tr -d '[:space:]' <"$WORK/probe.out")"
+  if [ "$probe" != "t" ]; then
+    fail "migrate's table is not in the throwaway database"
+    return 1
+  fi
+  say "$LABEL: migrate's work is in the throwaway database"
+  dc "$DOCKER_BOUND" down >/dev/null 2>&1 || { fail "could not stop the project on the cluster"; return 1; }
+  cp "$WORK/env.local" "$PROJ/.env"
+  rm -f "$WORK/env.local"
+  wait_stack "after restoring .env" || return 1
+  ids="$(containers_of postgres)" || { fail "could not list the postgres containers"; return 1; }
+  if [ -z "$ids" ]; then
+    fail "restoring .env did not bring the local postgres back"
+    return 1
+  fi
+  check_running || return 1
+  say "$LABEL: restoring .env brings the local postgres back"
 }
 
 # check_one <arg>: run every step for one target. Returns 0 on a pass, 1 on a
@@ -646,7 +1057,8 @@ check_one() {
         fail "docker compose up --wait failed"
       elif has_service server; then
         if check_running && check_startup_failure && check_runtime_env &&
-          check_image server && check_build_stage; then
+          check_image server && check_build_stage && check_store_env && check_migrated &&
+          check_stores_down && check_switch && check_migrate_failure; then
           rc=0
         fi
       elif has_service web; then

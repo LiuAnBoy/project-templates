@@ -117,7 +117,7 @@ pnpm dev          # 同時啟動前端（與後台）和 Node 後端
 curl https://codeload.github.com/LiuAnBoy/project-templates/tar.gz/master | tar -xz --strip=3 project-templates-master/overlays/<overlay>
 ```
 
-Overlay 帶來資料庫的程式碼與規則頁、連線設定（`.env.example`）、需要服務時的 `docker-compose.dev.yml`，以及完整的 `package.json` 與鎖定檔（Node），或 `pyproject.toml` 與 `uv.lock`（FastAPI）。
+Overlay 帶來資料庫的程式碼與規則頁、連線設定（`.env.example`）、需要服務時的 `docker-compose.dev.yml`，以及完整的 `package.json` 與鎖定檔（Node），或 `pyproject.toml` 與 `uv.lock`（FastAPI）。有資料庫時，`Dockerfile`、`docker-compose.yml` 與 `.dockerignore` 也隨之更新：compose 多一個一次性的 `migrate` 服務，PostgreSQL 的 overlay 另有 `docker-compose.postgres-cluster.yml`（見下方）。
 
 專案的啟動順序是：先安裝套件，再把 `.env.example` 複製成 `.env`，啟動服務，套用 migration，最後才啟動伺服器。伺服器缺少設定或服務時會拒絕啟動；啟動檢查只確認資料庫連得上（`select 1`），不檢查資料表，所以還沒套用 migration 的伺服器照樣啟動、健康檢查回 200，查詢卻會失敗（SQLite 例外：檔案由 migration 建立，缺檔時拒絕啟動），因此 migration 要在啟動前先做：
 
@@ -132,10 +132,21 @@ pnpm dev                                                 # FastAPI：make dev
 
 | 選擇 | 什麼時候用 |
 | ---- | ---------- |
-| `postgres` | 專案自己有 PostgreSQL 服務，之後只改 `.env` 就能換到共用的伺服器 |
+| `postgres` | 開發與正式都由專案自己的 compose 啟動一個全新的 PostgreSQL；之後只改 `.env` 的四行就能改連已經存在的共用伺服器 |
 | `sqlite` | 只有一個執行個體、不想多一個資料庫服務 |
 | `redis` | 只需要快取、鎖或佇列；沒有資料庫 |
 | `postgres,redis`、`sqlite,redis` | 資料庫加上 Redis；速率限制也改用 Redis 計數，讓多個執行個體共用同一個上限 |
+
+整個專案放進容器時（`docker compose up -d --build --wait`），`migrate` 先用伺服器的映像執行 migration，成功後 `server` 才啟動；`migrate` 失敗時 `server` 不會啟動，`up` 回傳非零。容器裡的資料庫網址由 compose 依服務名稱組成，`.env` 的 `DATABASE_URL` 只供在本機執行的伺服器使用，所以 PostgreSQL 的 `POSTGRES_PASSWORD` 必須是 URL 安全字元（英數字與 `-`、`.`、`_`、`~`）。SQLite 的檔案放在具名 volume `sqlite-data`，由 `migrate` 建立。Redis 一律是專案自己的 compose 裡的服務。
+
+要改連已經在某個 docker 網路上執行的 PostgreSQL，只改 `.env` 的四行，不改任何程式或 compose 檔：
+
+- `COMPOSE_FILE`：改成 `docker-compose.yml:docker-compose.postgres-cluster.yml`。
+- `POSTGRES_DOCKER_NETWORK`：填該伺服器所在的 docker 網路名稱。
+- `DATABASE_URL`：填該伺服器的連線網址。
+- `POSTGRES_DATABASE`：填該伺服器上已存在的資料庫名稱（單純的名稱，不是網址）。
+
+`docker-compose.postgres-cluster.yml` 不含任何網路名稱：它移除本機的 `postgres` 服務，把 `server` 與 `migrate` 接上那個外部網路，並改讀 `.env` 的 `DATABASE_URL`。`POSTGRES_PASSWORD` 仍要保留一個值，改回原本的四行就會回到本機的 PostgreSQL。
 
 FastAPI 的資料庫程式碼有整合測試，但沒有正式環境的使用紀錄。
 
@@ -150,12 +161,13 @@ cp .env.example .env     # 先編輯 COMPOSE_PROJECT_NAME
 docker compose up -d --build --wait
 ```
 
-- `COMPOSE_PROJECT_NAME` 是容器、網路與資料卷的名稱。留空時 compose 會失敗並指出這個變數，兩個專案因此不會共用容器或資料卷，`docker compose down -v` 也不會碰到別的專案。
+- `COMPOSE_PROJECT_NAME` 是容器、網路與資料卷的名稱。留空時 compose 會失敗並指出這個變數，`docker-compose.dev.yml` 也一樣；兩個專案因此不會共用容器或資料卷，`docker compose down -v` 也不會碰到別的專案。
 - 容器裡的伺服器固定聽 8000；`.env` 的 `PORT` 是本機 `127.0.0.1` 上對應的埠。祕密只透過 `env_file` 與 `environment` 在執行時傳入，不會進入映像。
+- 有資料庫的專案多一個一次性的 `migrate` 服務，用伺服器的映像先套用 migration，`server` 等它成功才啟動；`server` 與 `migrate` 讀 `.env` 時，資料庫的超級使用者密碼與 `TEST_*` 網址會被清空，因為程式用不到。改連共用 PostgreSQL 的四行設定見 [資料 overlay](#資料-overlay)。
 - Web 範本的服務叫 `web`，不讀 `env_file`，因為對外的容器不該拿到後端的資料庫帳密。它的值只來自 `.env` 的 `DOCKER_API_HOST`（API 的位置）與 `WEB_PORT`（本機 `127.0.0.1` 上的埠，預設 3000）。Next.js 把 `DOCKER_API_HOST` 當建置參數與執行時的 `API_HOST`；Vite 的 nginx 在容器啟動時才讀它，只轉發 `/api/v1/`，換 API 位置不必重新建置，但 nginx 啟動時必須解析得到這個主機，否則容器起不來。
-- `DOCKER_API_HOST` 預設 `http://host.docker.internal:8000`。Docker Desktop 把這個名稱轉到本機，所以能連到發佈在本機 `127.0.0.1` 的後端。Linux 上 `extra_hosts` 把它對應到 `host-gateway`，那是 bridge 位址，而後端只發佈在 `127.0.0.1`，預設值因此連不到本專案的後端。做法是讓 web 與後端加入同一個外部網路，`DOCKER_API_HOST` 填後端的服務名稱（`http://<服務名稱>:8000`），或填主機的實際位址。這是依 Docker 發佈埠的機制推得，沒有在 Linux 上實測。
+- `DOCKER_API_HOST` 預設 `http://host.docker.internal:8000`。Docker Desktop 把這個名稱轉到本機，所以能連到發佈在本機 `127.0.0.1` 的後端。Linux 上 `extra_hosts` 把它對應到 `host-gateway`，那是 bridge 位址，而後端只發佈在 `127.0.0.1`，預設值因此連不到本專案的後端。做法是讓 web 與後端加入同一個外部網路，`DOCKER_API_HOST` 填後端的服務名稱（`http://<服務名稱>:8000`）。主機的實際位址只連得到真的聽在那個位址上的後端，只發佈在 `127.0.0.1` 的後端不行。這是依 Docker 發佈埠的機制推得，沒有在 Linux 上實測。
 - 不使用 Docker 的專案刪掉這三個檔案即可。`AGENTS.md` 的 Docker 區塊與 `docs/rules/docker.md` 寫成「有這些檔案時」的規則，刪除之後仍然成立。
-- 維護範本時，`bash scripts/check-docker.sh fastify nest fastapi next vite` 會建置映像、在容器裡驗證，並檢查映像沒有祕密、不是以 root 執行；它用 28000、23000 等移動過的埠，不占用其他檢查的埠。沒有 Docker 時結束碼是 3，表示未完成，不是通過。
+- 維護範本時，`bash scripts/check-docker.sh fastify next vite` 加上 `bash scripts/check-overlays.sh --docker nest-postgres-redis nest-sqlite fastapi-postgres-redis fastapi-sqlite` 會建置映像、在容器裡驗證，並檢查映像沒有祕密、不是以 root 執行；有資料庫的專案還會驗證 `migrate`、儲存服務停止時的啟動失敗，以及改連共用 PostgreSQL 的四行設定。它用 28000、23000、25432、26379 等移動過的埠，不占用其他檢查的埠。沒有 Docker 時結束碼是 3，表示未完成，不是通過。
 
 ## 修改範本
 

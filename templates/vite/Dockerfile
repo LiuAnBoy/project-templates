@@ -1,6 +1,6 @@
 # Vite web image. The build stage installs from the lockfile and builds the static
 # files; the runtime stage is nginx (unprivileged, uid 101) serving them on 8080
-# and forwarding /api/ to API_HOST, which nginx reads from the environment when it
+# and forwarding /api/v1/ to API_HOST, which nginx reads from the environment when it
 # starts. Build with `docker compose build`, not by hand.
 FROM node:24-slim AS build
 ENV COREPACK_ENABLE_DOWNLOAD_PROMPT=0

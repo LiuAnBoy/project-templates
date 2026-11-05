@@ -36,7 +36,8 @@
  *     has one. The first fragment is the main block: its leading comment is the
  *     header. Every other fragment is a store block, a compose file whose only
  *     top-level keys are `services` and `volumes`. The output is the header,
- *     then one `services:` holding every block's services in layer order, then
+ *     the `name:` line that reads COMPOSE_PROJECT_NAME (the join writes it, never
+ *     a fragment), then one `services:` holding every block's services in layer order, then
  *     one `volumes:` likewise. A different top-level key, or a service or volume
  *     named twice, fails the render. A plain concatenation would repeat a key and
  *     a real merge needs a YAML parser, so the join is by section.

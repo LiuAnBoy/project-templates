@@ -4,8 +4,8 @@ These rules hold when the project has a `Dockerfile`, a `docker-compose.yml` and
 
 ## Starting
 
-- Copy `.env.example` to `.env` and set `COMPOSE_PROJECT_NAME` to a name that is unique on the machine. Compose refuses to start while it is empty and names the variable. The name keeps two projects apart, so `docker compose down -v` removes only this project's volumes.
-- `docker compose up -d --build --wait` builds the image, starts the services and returns when every healthcheck passes.
+- Copy `.env.example` to `.env` and set `COMPOSE_PROJECT_NAME` to a name that is unique on the machine. Compose refuses to start while it is empty and names the variable, for `docker-compose.dev.yml` too. The name keeps two projects apart, so `docker compose down -v` removes only this project's volumes.
+- `docker compose up -d --build --wait` builds the image, starts the services and returns when every healthcheck passes. A project with a database also runs `migrate` first (see Stores and migrations).
 - Every `*_PORT` setting of `.env` is a host port. A server inside its container always listens on 8000, and `PORT` in `.env` chooses the loopback port that reaches it. A web service listens on its framework's port inside the container (3000 for Next.js, 8080 for the nginx image of Vite), and `WEB_PORT` chooses the loopback port that reaches it.
 
 ## Images
@@ -16,6 +16,21 @@ These rules hold when the project has a `Dockerfile`, a `docker-compose.yml` and
 - A Vite image serves the built files from `nginxinc/nginx-unprivileged:alpine` on 8080. The image renders `nginx/default.conf.template` from the environment when it starts, so `API_HOST` needs no rebuild. The template forwards `/api/v1/` to `API_HOST` as a fixed upstream that nginx resolves at start, and answers every other path with `index.html`. Nothing else is forwarded, so the API's `/api/health` is not reachable through the web port.
 - The runtime user is numeric: `1000:1000` for the `node` and `app` users, with `--chown=1000:1000` on copied files, and `101:101` for the nginx image, whose configuration directory belongs to that uid. Only the final stage's `USER` counts.
 - A directory the process writes to is created and owned by the runtime uid in the image, because an empty named volume takes the ownership of the directory it mounts over.
+
+## Stores and migrations
+
+- A store runs as a service of `docker-compose.yml` and of `docker-compose.dev.yml`, from the same block. Compose fixes the URL a container uses from the service name (`postgres:5432`, `redis:6379`), so `.env`'s `DATABASE_URL` and `REDIS_URL` serve a server run on the host only. `POSTGRES_PASSWORD` has no default and must be URL-safe (letters, digits, `-`, `.`, `_`, `~`), because compose cannot encode it into the URL.
+- `server` and `migrate` read `.env` through `env_file`, so anything the app has no need of is blanked in `environment`: the store's superuser password and the `TEST_*` URLs. A new store block blanks its own.
+- `migrate` is a one-shot service: the server's image with its own command (`node scripts/db/migrate.mjs`, or `python scripts/db_migrate.py`), `restart: 'no'`, and the migration files copied into the image. `server` waits for it with `condition: service_completed_successfully`, so a failed migration leaves `server` unstarted and `docker compose up` exits non-zero naming `migrate`. Its output names counts and migrations, never a host, user, database name or password.
+- A store down at startup stops `server` with a non-zero exit that names the dependency and prints no password, URL or host and port.
+- SQLite keeps its file in the named volume `sqlite-data`, mounted at `/app/data` in `migrate` and `server`. The volume is declared at the top level of the file, and the image creates the directory for uid 1000. Only `migrate` creates the file.
+- Redis runs in the project's compose in every mode.
+
+## Using a shared PostgreSQL server
+
+- PostgreSQL starts fresh in the project's own compose, in development and in production. To use a server that already runs on a docker network, change four lines of `.env` and nothing else: `COMPOSE_FILE` (to `docker-compose.yml:docker-compose.postgres-cluster.yml`), `POSTGRES_DOCKER_NETWORK` (the network's name), `DATABASE_URL` (that server's URL) and `POSTGRES_DATABASE` (the plain name of a database that exists there). Keep `POSTGRES_PASSWORD` set: compose interpolates the base file before it merges the second.
+- `docker-compose.postgres-cluster.yml` is a plain file that names no network. It removes the `postgres` service and the dependencies on it, joins `server` and `migrate` to the external network beside the project's own (Redis stays reachable), and hands them `DATABASE_URL` from `.env`. Restoring `.env` brings the local service back. `-f docker-compose.dev.yml` commands ignore `COMPOSE_FILE`.
+- Nothing in the repository names a platform, a host or a network, and the network has no default: a blank `POSTGRES_DOCKER_NETWORK` fails naming the variable.
 
 ## Secrets
 
@@ -28,10 +43,10 @@ These rules hold when the project has a `Dockerfile`, a `docker-compose.yml` and
 
 - The server's healthcheck calls `GET /api/health` with the image's own runtime, because the slim images have no curl. A 503 marks the container unhealthy. `restart: unless-stopped` does not act on health, so an outage of a dependency does not restart the instances.
 - A web service's healthcheck reads `/`, because a web app has no `/api/health` and reading through the proxy would mark it unhealthy whenever the API is down.
-- A service that states no `restart` gets `unless-stopped`.
+- A service that states no `restart` gets `unless-stopped`; `migrate` states `restart: 'no'`.
 
 ## Ports and proxies
 
 - Published ports bind to `127.0.0.1`. Opening one beyond loopback requires a reverse proxy in front of it.
 - Behind a proxy, name the proxy in `TRUST_PROXY`. Leave it empty when nothing is in front: the limit then counts the socket address.
-- A standalone web container names its API in `DOCKER_API_HOST` in `.env`, which is both the image build argument (Next.js) and the running container's `API_HOST`. The default, `http://host.docker.internal:8000`, reaches a server published on the host's loopback where Docker Desktop forwards that name to the host. On Linux `extra_hosts` maps the name to `host-gateway`, which is the bridge address, and a server published on `127.0.0.1` does not listen there, so the default misses a server from this repository's compose. Put the web and the server on one external network and name the server's service in `DOCKER_API_HOST` (`http://<service>:8000`), or give the host's real address. This follows from how Docker publishes ports and was not run on Linux.
+- A standalone web container names its API in `DOCKER_API_HOST` in `.env`, which is both the image build argument (Next.js) and the running container's `API_HOST`. The default, `http://host.docker.internal:8000`, reaches a server published on the host's loopback where Docker Desktop forwards that name to the host. On Linux `extra_hosts` maps the name to `host-gateway`, which is the bridge address, and a server published on `127.0.0.1` does not listen there, so the default misses a server from this repository's compose. Put the web and the server on one external network and name the server's service in `DOCKER_API_HOST` (`http://<service>:8000`). The host's real address reaches only a server that listens on it, which a loopback-published server does not. This follows from how Docker publishes ports and was not run on Linux.

@@ -1,0 +1,3 @@
+COPY --chown=1000:1000 scripts ./scripts
+COPY --chown=1000:1000 alembic ./alembic
+COPY --chown=1000:1000 alembic.ini ./alembic.ini

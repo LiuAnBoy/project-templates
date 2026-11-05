@@ -78,7 +78,7 @@ NestJS 11（Fastify adapter）、TypeScript 6、zod 4（nestjs-zod）、nestjs-p
 
 ## SQLite
 
-資料庫檔案的路徑由 `.env` 的 `DATABASE_URL` 指定（相對於伺服器啟動時的目錄），必填，缺少時拒絕啟動並指出變數名稱。檔案必須已經存在：只有 migration 會建立它，路徑錯誤時啟動失敗，不會悄悄建出空資料庫。資料庫檔案放在 `data/`，該資料夾自帶 `.gitignore`，檔案不會被提交。
+資料庫檔案的路徑由 `.env` 的 `DATABASE_URL` 指定（相對於伺服器啟動時的目錄），必填，缺少時拒絕啟動並指出變數名稱。檔案必須已經存在：只有 migration 會建立它，路徑錯誤時啟動失敗，不會悄悄建出空資料庫。資料庫檔案放在 `data/`，該資料夾自帶 `.gitignore`，檔案不會被提交。在 Docker 裡，檔案放在具名 volume `sqlite-data`（掛在 `/app/data`），由 `migrate` 以 uid 1000 建立，`server` 之後讀取同一個檔案。
 
 | 頁面                                 | 內容                     |
 | ------------------------------------ | ------------------------ |
@@ -95,7 +95,7 @@ NestJS 11（Fastify adapter）、TypeScript 6、zod 4（nestjs-zod）、nestjs-p
 
 ## Redis
 
-連線設定在 `.env`：伺服器只讀 `REDIS_URL`（必填，缺少時拒絕啟動並指出變數名稱）；`REDIS_PORT` 供 `docker-compose.dev.yml` 啟動開發用的 Redis，換到共用的伺服器時只改 `.env`。啟動時 Redis 連不上，伺服器不會啟動，只指出依賴的名稱，不印出網址；啟動之後 Redis 失聯，健康檢查與速率限制回 503，行程不會結束。
+連線設定在 `.env`：在本機執行的伺服器只讀 `REDIS_URL`（必填，缺少時拒絕啟動並指出變數名稱）；容器裡的 `server` 固定連到同一份 compose 的 `redis` 服務。`REDIS_PORT` 是該服務在本機迴路上的埠。啟動時 Redis 連不上，伺服器不會啟動，只指出依賴的名稱，不印出網址；啟動之後 Redis 失聯，健康檢查與速率限制回 503，行程不會結束。
 
 | 頁面                               | 內容                       |
 | ---------------------------------- | -------------------------- |

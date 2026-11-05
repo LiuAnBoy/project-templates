@@ -1,10 +1,12 @@
 # Development services for this project. The credentials are fake and for
 # local development only; never reuse them anywhere else.
+# Needs .env: copy .env.example and give COMPOSE_PROJECT_NAME a value that is
+# unique on this machine, or compose refuses to start.
 # Start:               docker compose -f docker-compose.dev.yml up -d --wait
 # Stop:                docker compose -f docker-compose.dev.yml down
 # Stop and drop data:  docker compose -f docker-compose.dev.yml down -v
-# Compose reads .env in this directory for the values below; copy
-# .env.example to .env first.
+
+name: ${COMPOSE_PROJECT_NAME:?set COMPOSE_PROJECT_NAME in .env}
 
 services:
   postgres:
@@ -12,7 +14,7 @@ services:
     environment:
       POSTGRES_DB: ${POSTGRES_DATABASE:-app}
       POSTGRES_USER: ${POSTGRES_USER:-app}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-dev-only-postgres-pw-9f3a}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
     ports:
       - '127.0.0.1:${POSTGRES_PORT:-5432}:5432'
     volumes:

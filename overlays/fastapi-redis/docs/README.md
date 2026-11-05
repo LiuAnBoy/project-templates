@@ -74,7 +74,7 @@ FastAPI、Python 3.12 以上、pydantic 2、pydantic-settings、loguru、pytest�
 
 ## Redis
 
-連線設定在 `.env`：伺服器只讀 `REDIS_URL`（必填，缺少時拒絕啟動並指出變數名稱）；`REDIS_PORT` 供 `docker-compose.dev.yml` 啟動開發用的 Redis，換到共用的伺服器時只改 `.env`。啟動時 Redis 連不上，伺服器不會啟動，只指出依賴的名稱，不印出網址；啟動之後 Redis 失聯，健康檢查與速率限制回 503，行程不會結束。
+連線設定在 `.env`：在本機執行的伺服器只讀 `REDIS_URL`（必填，缺少時拒絕啟動並指出變數名稱）；容器裡的 `server` 固定連到同一份 compose 的 `redis` 服務。`REDIS_PORT` 是該服務在本機迴路上的埠。啟動時 Redis 連不上，伺服器不會啟動，只指出依賴的名稱，不印出網址；啟動之後 Redis 失聯，健康檢查與速率限制回 503，行程不會結束。
 
 | 頁面                               | 內容                       |
 | ---------------------------------- | -------------------------- |

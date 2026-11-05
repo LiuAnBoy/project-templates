@@ -1,0 +1,4 @@
+# A local database file stays out of the build context.
+**/*.db
+**/*.db-wal
+**/*.db-shm

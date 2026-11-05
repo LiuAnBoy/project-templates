@@ -364,6 +364,8 @@ function custom(files, recipesSource) {
 const read = (fx, rel) => fs.readFileSync(path.join(fx.root, rel), 'utf8');
 
 const COMPOSE_MAIN = '# Dev only.\n# Start: docker compose up.\n';
+/** The line the join adds to every compose file it writes, the dev file included. */
+const DEV_NAME = 'name: ${COMPOSE_PROJECT_NAME:?set COMPOSE_PROJECT_NAME in .env}\n';
 const COMPOSE_PG =
   'services:\n  postgres:\n    image: postgres:18-alpine\n    healthcheck:\n      test: ["CMD", "pg_isready"]\nvolumes:\n  postgres-data:\n';
 const COMPOSE_REDIS =
@@ -401,6 +403,7 @@ test('compose blocks join by section: one services key, volumes under one key, l
   assert.equal(
     out,
     `${COMPOSE_MAIN}
+${DEV_NAME}
 services:
   postgres:
     image: postgres:18-alpine
@@ -440,7 +443,7 @@ test('a compose block without volumes writes no volumes key', () => {
   assert.equal(render(fx, ['--only', 'pgonly']).code, 0);
   assert.equal(
     read(fx, 'overlays/pgonly/docker-compose.dev.yml'),
-    `${COMPOSE_MAIN}\nservices:\n  postgres:\n    image: x\n`,
+    `${COMPOSE_MAIN}\n${DEV_NAME}\nservices:\n  postgres:\n    image: x\n`,
   );
 });
 
@@ -462,7 +465,7 @@ test('a top-level key may carry a trailing comment', () => {
   assert.equal(render(fx, ['--only', 'pgonly']).code, 0);
   assert.equal(
     read(fx, 'overlays/pgonly/docker-compose.dev.yml'),
-    `${COMPOSE_MAIN}\nservices:\n  postgres:\n    image: x\n`,
+    `${COMPOSE_MAIN}\n${DEV_NAME}\nservices:\n  postgres:\n    image: x\n`,
   );
   const bad = composeFixture({ 'source/pg/compose.fragment.yml': 'services: value # note\n' });
   assert.match(render(bad, ['--only', 'pgonly']).out, /must open an indented block/);
@@ -789,7 +792,8 @@ test('docker-compose.yml is one services key with a store and app services, name
   // The dev file keeps the store services alone, and no fragment is copied.
   const dev = read(fx, 'templates/dk/docker-compose.dev.yml');
   assert.match(dev, /postgres:/);
-  assert.doesNotMatch(dev, /server:|name:/);
+  assert.doesNotMatch(dev, /server:/);
+  assert.equal(dev.match(/^name: /gm).length, 1);
   for (const name of ['compose.app.fragment.yml', 'compose.server.fragment.yml', 'Dockerfile.build.fragment', 'dockerignore.fragment']) {
     assert.equal(fs.existsSync(path.join(fx.root, 'templates/dk', name)), false, name);
   }
@@ -1028,7 +1032,64 @@ test('guard: a server store ships compose.server.fragment.yml, and a Docker laye
     buildDockerLive({ named: ['fastify', 'next-heroui'], frameworks: ['nest', 'fastapi'], stores: ['postgres', 'sqlite'] }),
     ['fastify', 'next-heroui', 'nest-postgres-redis', 'nest-sqlite', 'fastapi-postgres-redis', 'fastapi-sqlite'],
   );
-  assert.deepEqual(DOCKER_LIVE, ['fastify', 'next', 'vite', 'next-heroui']);
+  assert.deepEqual(DOCKER_LIVE, [
+    'fastify',
+    'next',
+    'vite',
+    'next-heroui',
+    'nest-postgres-redis',
+    'nest-sqlite',
+    'fastapi-postgres-redis',
+    'fastapi-sqlite',
+  ]);
+});
+
+test('guard on real output: a server store ships its fragment, a Docker layer runs in a live target, and each compose file has one name:', async () => {
+  const { serverStoresMissingFragment, checkOneName, DOCKER_FRAGMENT_NAMES } = await import(
+    new URL('./docker-blocks.mjs', import.meta.url).href
+  );
+  const { default: recipes, overlays, STORE_TRAITS, DOCKER_LIVE, dockerFragmentLayers, uncoveredDockerLayers } =
+    await loadRecipes();
+  const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+  assert.deepEqual(serverStoresMissingFragment(root, STORE_TRAITS), []);
+
+  // Every template and overlay, to the layers its Docker output is joined from.
+  const targets = Object.fromEntries([
+    ...Object.entries(recipes),
+    ...Object.entries(overlays).map(([name, entry]) => [name, entry.agentsLayers ?? [...recipes[entry.base], ...entry.layers]]),
+  ]);
+  const layers = dockerFragmentLayers(root, Object.values(targets).flat());
+  assert.ok(layers.includes('source/data/postgres/common'), 'the scan found no PostgreSQL Docker layer');
+  assert.deepEqual(uncoveredDockerLayers(targets, DOCKER_LIVE, layers), []);
+  assert.ok(DOCKER_FRAGMENT_NAMES.length > 0);
+
+  let seen = 0;
+  const problems = [];
+  for (const group of ['templates', 'overlays']) {
+    for (const name of fs.readdirSync(path.join(root, group))) {
+      for (const file of ['docker-compose.yml', 'docker-compose.dev.yml']) {
+        const full = path.join(root, group, name, file);
+        if (!fs.existsSync(full)) continue;
+        seen += 1;
+        problems.push(...checkOneName(fs.readFileSync(full, 'utf8'), `${group}/${name}/${file}`));
+      }
+    }
+  }
+  assert.deepEqual(problems, []);
+  assert.ok(seen >= 30, `the scan found ${seen} compose files, expected at least 30`);
+});
+
+test('guard: a compose file with no name:, two, or another one is reported; a store block with no server fragment is named; an unlisted Docker layer is named', async () => {
+  const { checkOneName, serverStoresMissingFragment } = await import(new URL('./docker-blocks.mjs', import.meta.url).href);
+  const { uncoveredDockerLayers } = await loadRecipes();
+  const line = 'name: ${COMPOSE_PROJECT_NAME:?set COMPOSE_PROJECT_NAME in .env}';
+  assert.deepEqual(checkOneName(`${line}\nservices:\n`, 'C'), []);
+  assert.equal(checkOneName('services:\n', 'C').length, 1);
+  assert.equal(checkOneName(`${line}\n${line}\n`, 'C').length, 1);
+  assert.equal(checkOneName('name: fixed\nservices:\n', 'C').length, 1);
+  const fx = dockerFixture({ 'source/data/redis/common/compose.fragment.yml': 'services: {}\n' });
+  assert.deepEqual(serverStoresMissingFragment(fx.root, { redis: { server: true } }), ['redis']);
+  assert.deepEqual(uncoveredDockerLayers({ a: ['source/x'], b: ['source/y'] }, ['a'], ['source/x', 'source/y']), ['source/y']);
 });
 
 test('guard on real output: every Dockerfile, compose file and .dockerignore of templates/ and overlays/ obeys the Docker rules', async () => {

@@ -305,12 +305,18 @@ export function uncoveredDockerLayers(targets, live, dockerLayers) {
 }
 
 /**
- * The targets that run as images. A later phase adds every layer that holds a
- * Docker fragment to a target here; `test-render.mjs` fails when one is in none.
+ * The targets that run as images: the standalone templates and the UI overlay named
+ * outright, then `nest` and `fastapi` with each database store, as
+ * `buildDockerLive` generates them. `test-render.mjs` fails when a layer holding a
+ * Docker fragment is in none of them.
  *
  * @type {string[]}
  */
-export const DOCKER_LIVE = ['fastify', 'next', 'vite', 'next-heroui'];
+export const DOCKER_LIVE = buildDockerLive({
+  named: ['fastify', 'next', 'vite', 'next-heroui'],
+  frameworks: ['nest', 'fastapi'],
+  stores: DATA_STORES,
+});
 
 Object.assign(overlays, dataOverlays);
 

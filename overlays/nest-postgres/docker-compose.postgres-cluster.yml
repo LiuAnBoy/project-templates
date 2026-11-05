@@ -1,0 +1,30 @@
+# Use a PostgreSQL server that already runs on a docker network instead of the
+# `postgres` service of docker-compose.yml. Nothing here is edited: name this
+# file in COMPOSE_FILE (see .env.example) and set POSTGRES_DOCKER_NETWORK,
+# DATABASE_URL and POSTGRES_DATABASE in .env. The file removes the local
+# service, joins `server` and `migrate` to that external network beside the
+# project's own, and hands them the URL from .env. Redis stays in
+# docker-compose.yml.
+services:
+  postgres: !reset null
+  server:
+    depends_on:
+      postgres: !reset null
+    environment:
+      DATABASE_URL: ${DATABASE_URL:?set DATABASE_URL in .env}
+    networks:
+      - default
+      - cluster
+  migrate:
+    depends_on:
+      postgres: !reset null
+    environment:
+      DATABASE_URL: ${DATABASE_URL:?set DATABASE_URL in .env}
+    networks:
+      - default
+      - cluster
+
+networks:
+  cluster:
+    name: ${POSTGRES_DOCKER_NETWORK:?set POSTGRES_DOCKER_NETWORK in .env}
+    external: true

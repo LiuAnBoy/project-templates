@@ -16,6 +16,8 @@ services:
       HOST: 0.0.0.0
       PORT: '8000'
       TRUST_PROXY: ${TRUST_PROXY:-}
+      REDIS_URL: redis://redis:6379
+      TEST_REDIS_URL: ''
     ports:
       - '127.0.0.1:${PORT:-8000}:8000'
     healthcheck:
@@ -28,6 +30,9 @@ services:
       timeout: 3s
       retries: 12
       start_period: 10s
+    depends_on:
+      redis:
+        condition: service_healthy
     restart: unless-stopped
   redis:
     image: redis:8-alpine

@@ -1,0 +1,51 @@
+# The whole project in containers: the images built from the Dockerfile in this
+# directory, and the services they need.
+# Needs .env: copy .env.example and give COMPOSE_PROJECT_NAME a value that is
+# unique on this machine, or compose refuses to start.
+# Start:               docker compose up -d --build --wait
+# Stop:                docker compose down
+# Stop and drop data:  docker compose down -v
+
+name: ${COMPOSE_PROJECT_NAME:?set COMPOSE_PROJECT_NAME in .env}
+
+services:
+  server:
+    build: .
+    env_file: .env
+    environment:
+      HOST: 0.0.0.0
+      PORT: '8000'
+      TRUST_PROXY: ${TRUST_PROXY:-}
+      DATABASE_URL: ./data/app.db
+    ports:
+      - '127.0.0.1:${PORT:-8000}:8000'
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request as u; u.urlopen('http://127.0.0.1:8000/api/health', timeout=3)
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    volumes:
+      - sqlite-data:/app/data
+    restart: unless-stopped
+  migrate:
+    # The one-shot migration: the server's image with its own command. It exits 0
+    # when the database is up to date, and `server` starts only after that.
+    build: .
+    env_file: .env
+    command: ['python', 'scripts/db_migrate.py']
+    restart: 'no'
+    environment:
+      DATABASE_URL: ./data/app.db
+    volumes:
+      - sqlite-data:/app/data
+
+volumes:
+  sqlite-data:

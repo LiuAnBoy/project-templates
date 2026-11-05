@@ -266,6 +266,8 @@ function assemble(header, sections, name) {
 /**
  * Join the store blocks of the layers into the dev compose file by section.
  * The first block found is the main block, whose leading comment is the header.
+ * The join writes `name:` itself, as it does for the whole project file, so a
+ * project that is not named fails before it starts a service.
  *
  * @param {string[]} layerDirs Absolute layer directories in order.
  * @returns {string | null} The compose file, or null when no layer has a block.
@@ -297,7 +299,7 @@ export function buildCompose(layerDirs) {
   const services = joinSection(bodies.services, 'services', new Set());
   if (services === null) throw new Error('compose fragments define no service');
   const volumes = joinSection(bodies.volumes, 'volumes', new Set());
-  return assemble(header, [['services', services], ['volumes', volumes]], null);
+  return assemble(header, [['services', services], ['volumes', volumes]], COMPOSE_NAME_LINE);
 }
 
 /**
@@ -809,6 +811,20 @@ export function checkWebEnvFile(text, label) {
 export function checkOneServices(text, label) {
   const count = text.split('\n').filter((line) => /^services:/.test(line)).length;
   return count === 1 ? [] : [`${label}: ${count} top-level services keys, expected 1`];
+}
+
+/**
+ * Check that a compose file holds exactly one top-level `name:` line, the one
+ * that reads `COMPOSE_PROJECT_NAME`, so `down -v` reaches only its own project.
+ *
+ * @param {string} text A compose file.
+ * @param {string} label Name of the file, for messages.
+ * @returns {string[]} A message when there is not exactly one, or it is not the join's line.
+ */
+export function checkOneName(text, label) {
+  const names = text.split('\n').filter((line) => /^name:/.test(line));
+  if (names.length !== 1) return [`${label}: ${names.length} top-level name keys, expected 1`];
+  return names[0] === COMPOSE_NAME_LINE ? [] : [`${label}: name is "${names[0]}", expected the COMPOSE_PROJECT_NAME line`];
 }
 
 /**

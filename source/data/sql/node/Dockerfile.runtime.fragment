@@ -1,0 +1,2 @@
+COPY --from=build --chown=1000:1000 /app/scripts ./scripts
+COPY --from=build --chown=1000:1000 /app/drizzle ./drizzle

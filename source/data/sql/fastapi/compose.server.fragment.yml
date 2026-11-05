@@ -1,0 +1,6 @@
+# `server` starts after `migrate` finished without error.
+services:
+  server:
+    depends_on:
+      migrate:
+        condition: service_completed_successfully

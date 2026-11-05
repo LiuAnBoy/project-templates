@@ -16,6 +16,9 @@ services:
       HOST: 0.0.0.0
       PORT: '8000'
       TRUST_PROXY: ${TRUST_PROXY:-}
+      DATABASE_URL: ./data/app.db
+      REDIS_URL: redis://redis:6379
+      TEST_REDIS_URL: ''
     ports:
       - '127.0.0.1:${PORT:-8000}:8000'
     healthcheck:
@@ -28,7 +31,25 @@ services:
       timeout: 3s
       retries: 12
       start_period: 10s
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    volumes:
+      - sqlite-data:/app/data
     restart: unless-stopped
+  migrate:
+    # The one-shot migration: the server's image with its own command. It exits 0
+    # when the database is up to date, and `server` starts only after that.
+    build: .
+    env_file: .env
+    command: ['python', 'scripts/db_migrate.py']
+    restart: 'no'
+    environment:
+      DATABASE_URL: ./data/app.db
+    volumes:
+      - sqlite-data:/app/data
   redis:
     image: redis:8-alpine
     ports:
@@ -39,3 +60,6 @@ services:
       timeout: 3s
       retries: 12
     restart: unless-stopped
+
+volumes:
+  sqlite-data:

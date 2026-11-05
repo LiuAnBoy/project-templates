@@ -81,7 +81,7 @@ These rules apply when the project has a `Dockerfile`, a `docker-compose.yml` an
 
 - Naming and types (`docs/rules/postgres.md`): instants are `timestamptz`, never `timestamp` without a zone and never Unix integers; ids are `uuid` defaulting to `gen_random_uuid()`; `created_at` and `updated_at` are `timestamptz` not null, defaulting to `now()`; a table that needs soft delete adds `deleted_at timestamptz`.
 - Schema, migrations, the query layer and transactions follow `docs/rules/postgres.md`. Every write goes through the transaction runner and the service passes the handle down; a `run` inside a `run` is refused at once, so never open a transaction inside a transaction.
-- `DATABASE_URL` is required and the only value the server reads; `docker-compose.dev.yml` runs the service in development, and a shared server is reached by changing `.env` alone.
+- `DATABASE_URL` is required and the only value a server run on the host reads. In containers compose builds the URL from the `POSTGRES_*` values, `migrate` runs the migrations before `server`, and a shared server on a docker network is reached by changing four lines of `.env` (`COMPOSE_FILE`, `POSTGRES_DOCKER_NETWORK`, `DATABASE_URL`, `POSTGRES_DATABASE`) and nothing else (`docs/rules/docker.md`).
 
 ## Database commands
 
@@ -95,7 +95,7 @@ Take the database from the global `InfraModule`: inject `DATABASE` (the Drizzle 
 
 - Cache, lock, pub/sub and queue work follows `docs/rules/redis.md`: keys are `<service>:<entity>:<id>`, every key written by application code has a TTL, never `FLUSHALL`, `FLUSHDB` or `KEYS`.
 - An unreachable Redis answers 503, not 500, and anything in it may be lost: the database stays the source of truth.
-- `REDIS_URL` is required and the only value the server reads; `docker-compose.dev.yml` runs the service in development, and a shared server is reached by changing `.env` alone. The default rate limit counts in Redis, so every instance shares one limit, and it answers 503 rather than letting requests through uncounted when Redis is unreachable.
+- `REDIS_URL` is required and the only value a server run on the host reads; both compose files run the service, and a containerised server always reaches it as `redis:6379`. The default rate limit counts in Redis, so every instance shares one limit, and it answers 503 rather than letting requests through uncounted when Redis is unreachable.
 
 ## Redis on NestJS
 

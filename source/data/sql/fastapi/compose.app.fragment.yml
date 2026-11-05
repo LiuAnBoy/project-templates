@@ -1,0 +1,8 @@
+services:
+  migrate:
+    # The one-shot migration: the server's image with its own command. It exits 0
+    # when the database is up to date, and `server` starts only after that.
+    build: .
+    env_file: .env
+    command: ['python', 'scripts/db_migrate.py']
+    restart: 'no'

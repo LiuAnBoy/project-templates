@@ -1,0 +1,17 @@
+# The SQLite file lives in a named volume that `migrate` and `server` share, at
+# the path DATABASE_URL names relative to /app. The image creates the directory
+# for uid 1000, and an empty named volume takes the ownership of what it covers.
+services:
+  server:
+    environment:
+      DATABASE_URL: ./data/app.db
+    volumes:
+      - sqlite-data:/app/data
+  migrate:
+    environment:
+      DATABASE_URL: ./data/app.db
+    volumes:
+      - sqlite-data:/app/data
+
+volumes:
+  sqlite-data:

@@ -5,8 +5,9 @@ PostgreSQL is accessed through SQLAlchemy 2 on `psycopg`, with Alembic for migra
 ## Connection settings
 
 - The server reads `DATABASE_URL`, a plain `postgresql://` URL whose driver the factory sets, and nothing in code names a host or a credential. A missing value, or a URL the engine cannot be built from (a port that is not a number, an unparsable host), stops the boot naming the variable and never the value.
-- `POSTGRES_DATABASE` is the plain database name. Compose uses it to create the database, and on a shared cluster it must name a database that exists there, because a wrong value blocks registering the service.
-- `POSTGRES_USER`, `POSTGRES_PASSWORD` and `POSTGRES_PORT` serve compose; the server reads only the URL. A project moves to another server by changing `.env` alone.
+- In containers (`docker-compose.yml`) compose builds `DATABASE_URL` for `server` and `migrate` from `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DATABASE` and the service name, so `.env`'s `DATABASE_URL` serves a server run on the host. `POSTGRES_PASSWORD` must be URL-safe (letters, digits, `-`, `.`, `_`, `~`), because compose cannot encode it. Neither container receives the superuser password as a variable.
+- `POSTGRES_DATABASE` is the plain database name. The project's own service creates it, and on a shared server it must name a database that exists there, because compose does not create it.
+- `POSTGRES_PORT` is the loopback port of the project's service. To use a shared PostgreSQL server that runs on a docker network, change four lines of `.env` and nothing else: `COMPOSE_FILE` (to `docker-compose.yml:docker-compose.postgres-cluster.yml`), `POSTGRES_DOCKER_NETWORK`, `DATABASE_URL` and `POSTGRES_DATABASE`. Keep `POSTGRES_PASSWORD` set. Restoring `.env` brings the local service back.
 - `src/db/database.py` is the one file that names PostgreSQL. It exports `create_database(config)`, which returns the session factory, the transaction runner, a probe and a close, and the `src/infra/` seam calls it once. Never create a second engine.
 - `TEST_DATABASE_URL` is read only by `make test-integration`, which refuses a host that is not local.
 
