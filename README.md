@@ -68,12 +68,12 @@ pnpm install
 ### 一次建立 monorepo
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/LiuAnBoy/project-templates/master/monorepo.sh | bash -s -- <project> <next|vite> <plain|antd|mui|heroui> <nest|fastify|fastapi> [--dashboard <next|vite> <plain|antd|mui|heroui>] [--data <postgres|sqlite|mysql|redis|postgres,redis|sqlite,redis|mysql,redis>]
+curl -fsSL https://raw.githubusercontent.com/LiuAnBoy/project-templates/master/monorepo.sh | bash -s -- <project> <next|vite> <plain|antd|mui|heroui> <nest|fastify|fastapi> [--dashboard <next|vite> <plain|antd|mui|heroui>] [--data <postgres|sqlite|mysql|redis|postgres,redis|sqlite,redis|mysql,redis>] [--no-docker]
 ```
 
-結果是 `<project>/`，內含 `web/`、`server/`、`docs/`，選 Node 後端時還有 `contract/`；加上 `--dashboard` 會多一個 `dashboard/`，建法與 `web/` 相同；加上 `--data` 會把該資料 overlay 疊在 `server/` 上（見「資料庫」）。`plain` 表示不套用 overlay。
+結果是 `<project>/`，內含 `web/`、`server/`、`docs/`，選 Node 後端時還有 `contract/`；加上 `--dashboard` 會多一個 `dashboard/`，建法與 `web/` 相同；加上 `--data` 會把該資料 overlay 疊在 `server/` 上（見「資料庫」）。`plain` 表示不套用 overlay。專案同時備好 Docker：根目錄有 `docker-compose.yml`、`.dockerignore` 與 `.env.example`，每個部分有自己的 `Dockerfile`（見「Docker」）；加上 `--no-docker` 就一個都不放。
 
-- 指令先驗證所有參數，才開始寫入，不合法一律以結束碼 2 拒絕；專案名稱只能用字母、數字、`.`、`_`、`-`，且以字母或數字開頭。目標已存在就拒絕，不會寫入任何東西。`--data` 必須有值。
+- 指令先驗證所有參數，才開始寫入，不合法一律以結束碼 2 拒絕；專案名稱只能用字母、數字、`.`、`_`、`-`，且以字母或數字開頭。目標已存在就拒絕，不會寫入任何東西。`--data` 必須有值，`--dashboard`、`--data`、`--no-docker` 各最多出現一次。
 - 它在同一個目錄旁的暫存目錄組合，全部成功才移到位。它不安裝套件，也不執行 `git init`，只印出下一步。
 - 每個部分保留自己的 `AGENTS.md`、`CLAUDE.md` 與 `docs/`。根目錄的 `docs/` 放產品規則，`web/docs/`、`server/docs/` 放實作文件。
 - 選 Node 後端（`nest`、`fastify`）時，`contract/` 的套件名稱是 `@app/contract`，已接進 `web/`、`dashboard/` 與 `server/` 的 `package.json`；根目錄的 `pnpm install` 會建置它。選 `fastapi` 時沒有 `contract/`（Python 後端用不到），根目錄只管理前端，後端用 uv。
@@ -88,7 +88,7 @@ pnpm install      # 安裝所有套件，並建置 contract
 pnpm dev          # 同時啟動前端（與後台）和 Node 後端
 ```
 
-選 `fastapi` 時，另外執行 `(cd server && uv sync)`，並在另一個終端機執行 `make -C server dev`。有 `--data` 時，`pnpm dev` 之前先照印出的步驟複製 `.env`、啟動服務、套用 migration。
+選 `fastapi` 時，另外執行 `(cd server && uv sync)`，並在另一個終端機執行 `make -C server dev`。有 `--data` 時，`pnpm dev` 之前先照印出的步驟複製 `.env`、啟動服務、套用 migration。要用容器跑整個專案，`pnpm install` 寫出鎖定檔之後執行 `cp .env.example .env && docker compose up -d --build --wait`。
 
 ## 重新命名與串接
 
@@ -157,6 +157,8 @@ FastAPI 與 MySQL 的資料庫程式碼有整合測試，但沒有正式環境�
 
 每個範本（`next`、`vite`、`nest`、`fastify`、`fastapi`，`workspace` 除外）各附三個檔案：`Dockerfile`、`docker-compose.yml` 與 `.dockerignore`。映像分兩個階段建置：第一階段依鎖定檔安裝並建置，執行階段只複製建置結果（後端另加正式環境的相依套件），以非 root 的固定 uid 執行（Vite 的 nginx 映像是 101，其餘是 1000），不含 `.env`、測試與原始碼。
 
+### 單獨範本
+
 啟動前先把 `.env.example` 複製成 `.env`，並替 `COMPOSE_PROJECT_NAME` 填一個在這台機器上不重複的名稱：
 
 ```sh
@@ -170,16 +172,34 @@ docker compose up -d --build --wait
 - Web 範本的服務叫 `web`，不讀 `env_file`，因為對外的容器不該拿到後端的資料庫帳密。它的值只來自 `.env` 的 `DOCKER_API_HOST`（API 的位置）與 `WEB_PORT`（本機 `127.0.0.1` 上的埠，預設 3000）。Next.js 把 `DOCKER_API_HOST` 當建置參數與執行時的 `API_HOST`；Vite 的 nginx 在容器啟動時才讀它，只轉發 `/api/v1/`，換 API 位置不必重新建置，但 nginx 啟動時必須解析得到這個主機，否則容器起不來。
 - `DOCKER_API_HOST` 預設 `http://host.docker.internal:8000`。Docker Desktop 把這個名稱轉到本機，所以能連到發佈在本機 `127.0.0.1` 的後端。Linux 上 `extra_hosts` 把它對應到 `host-gateway`，那是 bridge 位址，而後端只發佈在 `127.0.0.1`，預設值因此連不到本專案的後端。做法是讓 web 與後端加入同一個外部網路，`DOCKER_API_HOST` 填後端的服務名稱（`http://<服務名稱>:8000`）。主機的實際位址只連得到真的聽在那個位址上的後端，只發佈在 `127.0.0.1` 的後端不行。這是依 Docker 發佈埠的機制推得，沒有在 Linux 上實測。
 - 不使用 Docker 的專案刪掉這三個檔案即可。`AGENTS.md` 的 Docker 區塊與 `docs/rules/docker.md` 寫成「有這些檔案時」的規則，刪除之後仍然成立。
-- 維護範本時，`bash scripts/check-docker.sh fastify next vite` 加上 `bash scripts/check-overlays.sh --docker nest-postgres-redis nest-sqlite fastapi-postgres-redis fastapi-sqlite` 會建置映像、在容器裡驗證，並檢查映像沒有祕密、不是以 root 執行；有資料庫的專案還會驗證 `migrate`、儲存服務停止時的啟動失敗，以及改連共用 PostgreSQL 的四行設定。它用 28000、23000、25432、26379 等移動過的埠，不占用其他檢查的埠。沒有 Docker 時結束碼是 3，表示未完成，不是通過。
+
+### monorepo 的 Docker
+
+`monorepo.sh` 建立的專案在根目錄有 `docker-compose.yml`、`.dockerignore` 與 `.env.example`；每個前端有自己的 `Dockerfile`，Node 後端的在 `server/`，FastAPI 後端的 `Dockerfile` 與 `.dockerignore` 也在 `server/`，因為它的 context 是 `server/`。其餘的建置 context 都是 workspace 根目錄。根目錄的檔案和單獨範本用同一套 block 組出來，所以 `migrate`、儲存服務與 PostgreSQL 的共用伺服器切換（`docker-compose.postgres-cluster.yml` 移到根目錄）都和資料 overlay 一致。
+
+```sh
+pnpm install                                   # 寫出映像依據的鎖定檔
+cp .env.example .env && docker compose up -d --build --wait
+```
+
+- 根目錄 `.env.example` 已填好 `COMPOSE_PROJECT_NAME`（專案名稱）與 `EDGE_SUBNET`（由名稱算出的 `10.x.y.0/24`）；名稱或網段在本機被占用時改它們。各部分的 `.env.example` 不再有 Docker 的行，`server/.env.example` 仍供在主機上執行的後端使用。
+- 前端與後端在 `edge` 網路上，儲存服務不在。`server` 不發佈埠，只經由前端到達；前端的埠（`WEB_PORT` 預設 3000，`DASHBOARD_PORT` 預設 3001）只綁 `127.0.0.1`。`TRUST_PROXY` 與 `EDGE_SUBNET` 相同，後端只相信 `edge` 上前端轉來的訪客位址，別處的容器偽造標頭也不會得到自己的限流桶；兩個專案的網段相撞時，`up` 會以 `Pool overlaps` 失敗，改 `.env` 即可。要把前端的埠開到 loopback 以外，前面必須有反向代理。
+- 前端不讀 `env_file`；後端與 `migrate` 讀根目錄的 `.env`。
+- 加 `--no-docker` 時，這些檔案與各部分的三個 Docker 檔案都不放，`docker-compose.dev.yml` 保留。
+
+### 驗證映像
+
+維護範本時，`bash scripts/check-docker.sh fastify next vite` 加上 `bash scripts/check-overlays.sh --docker nest-postgres-redis nest-sqlite fastapi-postgres-redis fastapi-sqlite` 會建置映像、在容器裡驗證，並檢查映像沒有祕密、不是以 root 執行；有資料庫的專案還會驗證 `migrate`、儲存服務停止時的啟動失敗，以及改連共用 PostgreSQL 的四行設定。`check-docker.sh` 也接受組好的 monorepo 目錄，並驗證 `server` 不發佈埠、兩個偽造訪客各有自己的限流桶、`edge` 之外的容器不被相信。它用 28000、23000、23001、25432、23306、26379 等移動過的埠，不占用其他檢查的埠。沒有 Docker 時結束碼是 3，表示未完成，不是通過。
+
 
 ## 修改範本
 
 `templates/` 與 `overlays/` 是產生出來的，並且提交進 repo；不要手改，手改會在下次 render 被覆蓋，`render.mjs --check` 也會失敗。
 
-1. 修改 `source/`（各層的檔案與 `package.fragment.json`、`AGENTS.fragment.md`），或在 `scripts/recipes.mjs` 調整各範本由哪些層組成。
+1. 修改 `source/`（各層的檔案與 `package.fragment.json`、`AGENTS.fragment.md`），或在 `scripts/recipes.mjs` 調整各範本由哪些層組成。monorepo 根目錄的 Docker 檔案來自 `source/docker/monorepo`，不列在任何 recipe，由 `monorepo.sh` 呼叫 `scripts/docker-blocks.mjs` 組出。
 2. `node scripts/render.mjs`（可用 `--only a,b`）重新產生。
 3. 相依套件變動時：`bash scripts/lock.sh <name>...` 重新產生鎖定檔（`--data` 加上所有資料 overlay）。
-4. `bash scripts/verify.sh`：建立封存檔，驗證每個 overlay 與範本（安裝、lint、型別、測試、建置、實際啟動、文件、`.env` 被忽略），資料 overlay 還會用 Docker 啟動真正的 PostgreSQL 與 Redis（占用 15432 與 16379 埠）驗證，用 `monorepo.sh` 組出五種組合並實際連線，最後確認 `monorepo.sh` 會拒絕不合法的輸入。全部通過才算完成，並更新 `VERSIONS.md` 的驗證日期；沒有 Docker 時結束碼是 3，表示未完成，不是通過，也不會更新驗證日期。
+4. `bash scripts/verify.sh`：建立封存檔，驗證每個 overlay 與範本（安裝、lint、型別、測試、建置、實際啟動、文件、`.env` 被忽略），資料 overlay 還會用 Docker 啟動真正的 PostgreSQL、MySQL 與 Redis（占用 15432、13306 與 16379 埠）驗證，用 `monorepo.sh` 組出五種組合並實際連線，確認 `monorepo.sh` 會拒絕不合法的輸入（重複的 `--no-docker` 也是），再檢查一個 `--no-docker` 的組合沒有任何 Docker 檔案。最後建置並驗證映像：`scripts/recipes.mjs` 的 `DOCKER_LIVE` 每個目標，加上三個 monorepo 組合（`next plain nest --dashboard vite plain --data postgres,redis`、`vite plain fastapi --data sqlite`、`next plain fastify --data sqlite`）；這一步只用 23000、23001、28000、25432、23306、26379 這些移動過的埠。全部通過才算完成，並更新 `VERSIONS.md` 的驗證日期；沒有 Docker 時結束碼是 3，表示未完成，不是通過，也不會更新驗證日期。
 
 各腳本的細節在 [`AGENTS.md`](AGENTS.md)。
 

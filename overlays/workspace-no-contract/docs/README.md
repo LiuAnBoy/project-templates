@@ -28,6 +28,15 @@ FastAPI 後端是 Python 專案，用不到 TypeScript 的 `contract` 套件。�
 | 後端   | `make -C server dev`                       | 啟動後端（含 reload），埠 8000          |
 | 後端   | `make -C server lint`、`test`              | 後端的檢查                              |
 
+## Docker
+
+用 `monorepo.sh` 建立的專案（沒有加 `--no-docker`）根目錄有 `docker-compose.yml`、`.dockerignore` 與 `.env.example`；前端各有自己的 `Dockerfile`，後端的 `Dockerfile` 與 `.dockerignore` 在 `server/`。
+
+- 根目錄的 `docker-compose.yml` 啟動整個專案：每個前端各一個服務（`web`、`dashboard`）、後端 `server`，以及所選資料庫帶來的儲存服務與一次性的 `migrate`。前端的 context 是 workspace 根目錄，後端的是 `server/`。
+- 啟動：`cp .env.example .env`，先執行一次 `pnpm install`（前端映像依它寫出的鎖定檔安裝），再 `docker compose up -d --build --wait`。
+- 前端與後端在 `edge` 網路上，儲存服務不在。`server` 不發佈埠，只經由前端到達；前端的埠只綁 `127.0.0.1`。`TRUST_PROXY` 與 `EDGE_SUBNET` 相同，後端因此只相信前端轉來的訪客位址，兩者要保持一致。
+- `COMPOSE_PROJECT_NAME` 與 `EDGE_SUBNET` 已依專案名稱填好；名稱或網段在本機被占用時再改。
+
 ## 文件索引
 
 根目錄目前沒有其他頁面。前端與後端的文件從各自的 `docs/README.md` 進入。

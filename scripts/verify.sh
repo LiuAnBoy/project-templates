@@ -25,12 +25,19 @@
 #      `--data postgres,redis` the compose file of server/ is started with the command
 #      its own header prints (which must name the project), .env is written, the
 #      database migrated, and the compose project is dropped afterwards
-#   7. monorepo.sh refuses bad input with exit 2 and writes nothing
-#   8. node scripts/versions.mjs --stamp, only when nothing was left incomplete
+#   7. monorepo.sh refuses bad input with exit 2 and writes nothing (`--no-docker` twice
+#      included), and one composition made with `--no-docker` has none of the Docker files
+#   8. the images: check-docker.sh on every target of DOCKER_LIVE, then on three
+#      compositions (`next plain nest --dashboard vite plain --data postgres,redis`,
+#      `vite plain fastapi --data sqlite`, `next plain fastify --data sqlite`), one at a
+#      time; a target that exits 3 is counted as incomplete, any other failure stops the run
+#   9. node scripts/versions.mjs --stamp, only when nothing was left incomplete
 # Needs network access (package installs), pnpm, uv, git, curl and node, and Docker for
 # the real-store checks. The ports a run uses must be free: 8000 plus the web ports of a
 # composition (3000, 3001, 15173), and 15432 (PostgreSQL), 13306 (MySQL) and 16379
 # (Redis) for the services of the data overlays and of the PostgreSQL composition.
+# The Docker step (8) uses only moved ports: 23000 and 23001 (web parts), 28000 (server and
+# the Vite stub), 25432 (PostgreSQL), 23306 (MySQL) and 26379 (Redis).
 # The Vite compositions run on 15173 rather than its default 5173, because a Vite dev
 # server is often running for other work on the machine, and the proxy under test does
 # not depend on the port.
@@ -396,6 +403,59 @@ data_overlays() {
   done
 }
 
+# check_no_docker: a composition made with --no-docker holds none of the Docker files.
+check_no_docker() {
+  compose "$WORK/m-nodocker" nodocker next plain nest --data postgres --no-docker || return 1
+  proj="$WORK/m-nodocker/nodocker"
+  for part in web server; do
+    for f in Dockerfile docker-compose.yml .dockerignore; do
+      [ ! -e "$proj/$part/$f" ] || { echo "FAIL --no-docker left $part/$f" >&2; return 1; }
+    done
+  done
+  [ ! -e "$proj/docker-compose.yml" ] && [ ! -e "$proj/.dockerignore" ] && [ ! -e "$proj/server/docker-compose.postgres-cluster.yml" ] ||
+    { echo "FAIL --no-docker left a Docker file" >&2; return 1; }
+  [ -f "$proj/server/docker-compose.dev.yml" ] || { echo "FAIL --no-docker removed docker-compose.dev.yml" >&2; return 1; }
+  if grep -q -E '^(COMPOSE_PROJECT_NAME|COMPOSE_FILE|[A-Z_]*_DOCKER_NETWORK|DOCKER_API_HOST|WEB_PORT)=' "$proj/web/.env.example" "$proj/server/.env.example"; then
+    echo "FAIL --no-docker left a Docker line in a .env.example" >&2
+    return 1
+  fi
+  node "$ROOT/scripts/check-docs.mjs" "$proj" || return 1
+  rm -rf "$WORK/m-nodocker"
+  echo "PASS monorepo --no-docker"
+}
+
+# docker_run <label> <check-docker args...>: run check-docker.sh; exit 3 counts as incomplete,
+# any other failure is a failure.
+docker_run() {
+  label="$1"
+  shift
+  bash "$ROOT/scripts/check-docker.sh" "$@"
+  rc=$?
+  case "$rc" in
+    0) ;;
+    3)
+      INCOMPLETE=$((INCOMPLETE + 1))
+      echo "INCOMPLETE $label: needs Docker; no image was built"
+      ;;
+    *) return 1 ;;
+  esac
+}
+
+# docker_targets: the images of every DOCKER_LIVE target, then of three compositions.
+docker_targets() {
+  names="$(node -e 'import(require("url").pathToFileURL(process.argv[1]).href).then((m) => console.log(m.DOCKER_LIVE.join("\n")))' "$ROOT/scripts/recipes.mjs")" || return 1
+  for target in $names; do
+    docker_run "$target" "$target" || return 1
+  done
+  compose "$WORK/d-1" dk1 next plain nest --dashboard vite plain --data postgres,redis || return 1
+  compose "$WORK/d-2" dk2 vite plain fastapi --data sqlite || return 1
+  compose "$WORK/d-3" dk3 next plain fastify --data sqlite || return 1
+  for n in 1 2 3; do
+    docker_run "composition $n" "$WORK/d-$n/dk$n" || return 1
+    rm -rf "$WORK/d-$n"
+  done
+}
+
 # listing <dir>: print the names inside a directory, including dotfiles.
 listing() {
   ls -A "$1"
@@ -435,6 +495,7 @@ check_refusals() {
     "p next plain nest --data postgres,sqlite" \
     "p next plain nest --data postgres,redis,redis" \
     "p next plain nest --data redis --data redis" \
+    "p next plain nest --no-docker --no-docker" \
     "p next plain nest --data redis --dashboard next" \
     "p next plain nest --dashboard next plain --data nope" \
     "p next plain nest --data sqlite --dashboard nope plain" \
@@ -483,6 +544,8 @@ step "monorepo next plain nest with dashboard next antd" compose_and_run third 0
 step "monorepo next plain fastify with sqlite" compose_and_run fourth 0 3000 -- next plain fastify --data sqlite
 step "monorepo vite plain fastapi with postgres and redis" compose_and_run fifth 0 15173 -- vite plain fastapi --data postgres,redis
 step "monorepo refusals" check_refusals
+step "monorepo without Docker" check_no_docker
+step "docker images" docker_targets
 
 if [ ! -f "$ROOT/scripts/versions.mjs" ]; then
   die "scripts/versions.mjs does not exist yet; VERSIONS.md was not stamped"
