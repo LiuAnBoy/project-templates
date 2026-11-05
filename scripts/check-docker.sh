@@ -15,7 +15,8 @@
 #   1. Docker absent or its daemon silent: `INCOMPLETE <target>: needs Docker; no
 #      image was built`, and the exit is 3.
 #   2. `.env` is the whole `.env.example` with every *_PORT value moved up by
-#      20000 (8000 becomes 28000), so no port of the other checks is needed.
+#      20000 (8000 becomes 28000, 3000 becomes 23000), and the port of
+#      DOCKER_API_HOST with them, so no port of the other checks is needed.
 #      `SENTINEL_SECRET` is planted in `.env`, and sentinel files in `todos/` and
 #      `node_modules/` of the build context. With COMPOSE_PROJECT_NAME blank,
 #      `docker compose config` must fail naming the variable; then it is set.
@@ -24,7 +25,12 @@
 #   4. `/api/health` read from inside `server` answers exactly {"status":"ok"},
 #      every running service is healthy, and hello answers through the published
 #      port. A server also shows its startup failure unchanged: a bad setting
-#      exits non-zero, names the setting and holds no value.
+#      exits non-zero, names the setting and holds no value. A project with no
+#      `server` service (a web base) is checked on its web services instead: each
+#      is healthy and `/` answers 200 through its published port. A Vite project
+#      also answers a deep link such as `/some/route` with `index.html`, and
+#      `/api/v1/hello` from a stub the script runs on the host at 28000, which
+#      DOCKER_API_HOST names through host.docker.internal.
 #   5. Image guards on every image the project built: the user is not root, the
 #      sentinel is absent from `docker history`, `Config.Env` and the exported
 #      container filesystem, and `.env`, `todos/` and the planted
@@ -32,21 +38,25 @@
 #      Dockerfile has one named `build`, is exported the same way, because that
 #      is where `COPY . .` puts the context. At runtime `server` sees the
 #      sentinel, which proves the check can see it, and `web` and `dashboard`,
-#      which read no `env_file`, do not.
-# A trap runs `down -v --rmi local` for the project and removes the build-stage
-# image, by name, and nothing else.
+#      which read no `env_file`, do not (their whole environment is read, and
+#      must hold PATH, so an empty read is never an absence).
+# A trap runs `down -v --rmi local` for the project, removes the build-stage
+# image by name and stops the stub, and nothing else.
 #
 # What the script assumes of a project (the contract its files meet):
 #   - `.env.example` lines are NAME=value, COMPOSE_PROJECT_NAME is one of them
 #     and empty, and every host port is a *_PORT line (`PORT` for the server).
 #   - `docker-compose.yml` starts with `name: ${COMPOSE_PROJECT_NAME:?...}`, has a
 #     service `server` that builds the Dockerfile at the project root and answers
-#     GET /api/health on its own port 8000, and names no `container_name`.
+#     GET /api/health on its own port 8000, or no `server` and a service `web`
+#     that answers GET / and publishes `WEB_PORT`; it names no `container_name`.
+#   - A web service reads no `env_file`.
 #   - A Python project has a `pyproject.toml`; anything else is a Node project.
 #
 # Exit codes: 0 every target ran and passed; 1 a target failed; 2 usage; 3 Docker
 # is absent or its daemon does not answer, so the check is incomplete and never a
 # pass (a failure of another target still makes the exit 1).
+# Needs node on the PATH when the project is a Vite web base (the stub).
 # Environment: BUILD_BOUND (seconds for a build, default 900), UP_BOUND (seconds
 # for `up --wait`, default 300), DOCKER_BOUND (seconds for any other Docker
 # command, default 60).
@@ -60,6 +70,7 @@ DOCKER_BOUND="${DOCKER_BOUND:-60}"
 PORT_SHIFT=20000
 HELLO_BODY='{"success":true,"payload":{"data":{"message":"hello world!!"}}}'
 HEALTH_BODY='{"status":"ok"}'
+STUB_PORT=$((8000 + PORT_SHIFT))
 
 if [ "$#" -lt 1 ]; then
   echo "usage: scripts/check-docker.sh <name-or-dir>..." >&2
@@ -74,6 +85,7 @@ SENTINEL=""
 STARTED=0
 COUNTER=0
 BUILD_IMAGE=""
+STUB_PID=""
 
 # kill_tree <signal> <pid>: send a signal to a process and all its descendants.
 kill_tree() {
@@ -172,12 +184,17 @@ teardown() {
     if [ -n "$BUILD_IMAGE" ]; then
       run_bound "$DOCKER_BOUND" docker rmi -f "$BUILD_IMAGE" >/dev/null 2>&1
     fi
+    if [ -n "$STUB_PID" ]; then
+      kill "$STUB_PID" 2>/dev/null
+      { wait "$STUB_PID"; } 2>/dev/null
+    fi
     rm -rf "$WORK"
   fi
   WORK=""
   PROJ=""
   STARTED=0
   BUILD_IMAGE=""
+  STUB_PID=""
 }
 trap teardown EXIT
 trap 'exit 130' INT TERM
@@ -225,6 +242,12 @@ write_env() {
   [ -f "$PROJ/.env.example" ] || { fail ".env.example is missing"; return 1; }
   awk -v shift="$PORT_SHIFT" '
     /^[A-Za-z0-9_]*PORT=[0-9]+$/ { split($0, kv, "="); print kv[1] "=" (kv[2] + shift); next }
+    /^DOCKER_API_HOST=.*:[0-9]+$/ {
+      n = split($0, parts, ":")
+      sub(/:[0-9]+$/, ":" (parts[n] + shift))
+      print
+      next
+    }
     { print }
   ' "$PROJ/.env.example" >"$PROJ/.env" || return 1
   printf 'SENTINEL_SECRET=%s\n' "$SENTINEL" >>"$PROJ/.env"
@@ -262,6 +285,11 @@ is_python() {
   [ -f "$PROJ/pyproject.toml" ]
 }
 
+# has_service <name>: succeed when docker-compose.yml defines the service.
+has_service() {
+  grep -q "^  $1:" "$PROJ/docker-compose.yml"
+}
+
 # service_exec <service> <command...>: run a command in a running service.
 service_exec() {
   local svc
@@ -279,15 +307,9 @@ read_health() {
   fi
 }
 
-# check_running: health inside server, every service healthy, hello through the port.
-check_running() {
-  local body ids id state port hello
-  body="$(read_health 2>/dev/null)"
-  if [ "$body" != "$HEALTH_BODY" ]; then
-    fail "/api/health from inside server answered '$body', expected '$HEALTH_BODY'"
-    return 1
-  fi
-  say "$LABEL: /api/health answers exactly $HEALTH_BODY from inside server"
+# check_healthy: at least one service runs and every running one is healthy.
+check_healthy() {
+  local ids id state
   ids="$(dc "$DOCKER_BOUND" ps -q 2>/dev/null)"
   [ -n "$ids" ] || { fail "no service is running"; return 1; }
   for id in $ids; do
@@ -301,6 +323,18 @@ check_running() {
     esac
   done
   say "$LABEL: every running service is healthy"
+}
+
+# check_running: health inside server, every service healthy, hello through the port.
+check_running() {
+  local body port hello
+  body="$(read_health 2>/dev/null)"
+  if [ "$body" != "$HEALTH_BODY" ]; then
+    fail "/api/health from inside server answered '$body', expected '$HEALTH_BODY'"
+    return 1
+  fi
+  say "$LABEL: /api/health answers exactly $HEALTH_BODY from inside server"
+  check_healthy || return 1
   port="$(env_value "$PROJ/.env" PORT)"
   hello="$(curl -s --max-time 10 "http://127.0.0.1:$port/api/v1/hello")"
   if [ "$hello" != "$HELLO_BODY" ]; then
@@ -308,6 +342,75 @@ check_running() {
     return 1
   fi
   say "$LABEL: hello answers through the published port $port"
+}
+
+# start_stub: answer GET /api/v1/hello on all interfaces of the host at STUB_PORT,
+# as the API a standalone web container reaches through host.docker.internal.
+start_stub() {
+  local i
+  STUB_BODY="$HELLO_BODY" STUB_PORT="$STUB_PORT" node -e "
+    require('http')
+      .createServer((req, res) => {
+        if (req.url === '/api/v1/hello') {
+          res.setHeader('content-type', 'application/json');
+          res.end(process.env.STUB_BODY);
+        } else {
+          res.statusCode = 404;
+          res.end();
+        }
+      })
+      .listen(Number(process.env.STUB_PORT), '0.0.0.0');
+  " >"$WORK/stub.out" 2>&1 &
+  STUB_PID=$!
+  i=0
+  while [ "$i" -lt 50 ]; do
+    if [ "$(curl -s --max-time 2 "http://127.0.0.1:$STUB_PORT/api/v1/hello")" = "$HELLO_BODY" ]; then
+      return 0
+    fi
+    kill -0 "$STUB_PID" 2>/dev/null || break
+    sleep 0.1
+    i=$((i + 1))
+  done
+  cat "$WORK/stub.out" >&2
+  fail "the API stub did not start on port $STUB_PORT (is it in use?)"
+  return 1
+}
+
+# check_web: a project with no server. Every service is healthy, `/` answers 200
+# through the published web port, and a Vite project answers a deep link with
+# index.html and reaches the stub through its proxy.
+check_web() {
+  local port code root_body deep_body hello
+  check_healthy || return 1
+  port="$(env_value "$PROJ/.env" WEB_PORT)"
+  [ -n "$port" ] || { fail "WEB_PORT is not set in .env"; return 1; }
+  root_body="$WORK/web-root.out"
+  code="$(curl -s --max-time 10 -o "$root_body" -w '%{http_code}' "http://127.0.0.1:$port/")"
+  if [ "$code" != "200" ]; then
+    fail "/ answered $code through web port $port"
+    return 1
+  fi
+  say "$LABEL: / answers 200 through the published web port $port"
+  if is_vite; then
+    deep_body="$WORK/web-deep.out"
+    code="$(curl -s --max-time 10 -o "$deep_body" -w '%{http_code}' "http://127.0.0.1:$port/some/route")"
+    if [ "$code" != "200" ] || ! cmp -s "$root_body" "$deep_body"; then
+      fail "a deep link answered $code and not the index.html of /"
+      return 1
+    fi
+    say "$LABEL: a deep link answers 200 with index.html"
+    hello="$(curl -s --max-time 10 "http://127.0.0.1:$port/api/v1/hello")"
+    if [ "$hello" != "$HELLO_BODY" ]; then
+      fail "/api/v1/hello through web port $port answered '$hello', not the stub's body"
+      return 1
+    fi
+    say "$LABEL: /api/v1/hello reaches the API stub through the proxy"
+  fi
+}
+
+# is_vite: succeed for a Vite project.
+is_vite() {
+  grep -q '"vite"' "$PROJ/package.json" 2>/dev/null
 }
 
 # check_startup_failure: a bad setting makes the container exit non-zero, naming the
@@ -460,18 +563,24 @@ check_build_stage() {
 # check_runtime_env: the server sees the sentinel; web and dashboard do not.
 check_runtime_env() {
   local seen svc ids
-  seen="$(service_exec server printenv SENTINEL_SECRET 2>/dev/null | tr -d '\r')"
-  if [ "$seen" != "$SENTINEL" ]; then
-    fail "server does not see SENTINEL_SECRET at runtime, so the sentinel checks prove nothing"
-    return 1
+  if has_service server; then
+    seen="$(service_exec server printenv SENTINEL_SECRET 2>/dev/null | tr -d '\r')"
+    if [ "$seen" != "$SENTINEL" ]; then
+      fail "server does not see SENTINEL_SECRET at runtime, so the sentinel checks prove nothing"
+      return 1
+    fi
+    say "$LABEL: server sees the sentinel at runtime"
   fi
-  say "$LABEL: server sees the sentinel at runtime"
   for svc in web dashboard; do
     ids="$(dc "$DOCKER_BOUND" ps -q "$svc" 2>/dev/null)" || { fail "could not list service $svc"; return 1; }
     if [ -n "$ids" ]; then
       # Read the whole environment: a failed exec must not look like an absent variable.
       read_checked "$WORK/printenv.out" "the environment of $svc" \
         docker compose -p "$PROJECT" --project-directory "$PROJ" exec -T "$svc" printenv || return 1
+      if ! grep -q '^PATH=' "$WORK/printenv.out"; then
+        fail "the environment read of $svc holds no PATH, so it proves nothing"
+        return 1
+      fi
       if ! absent_from "$WORK/printenv.out" "$SENTINEL"; then
         fail "$svc sees the sentinel, but it reads no env_file"
         return 1
@@ -515,7 +624,9 @@ check_one() {
     set_project_name "$PROJECT"
     STARTED=1
     start=$(date +%s)
-    if ! dc "$BUILD_BOUND" build >"$WORK/build.out" 2>&1; then
+    if ! has_service server && is_vite && ! start_stub; then
+      :
+    elif ! dc "$BUILD_BOUND" build >"$WORK/build.out" 2>&1; then
       tail -n 30 "$WORK/build.out" >&2
       fail "docker compose build failed"
     else
@@ -525,9 +636,17 @@ check_one() {
         tail -n 30 "$WORK/up.out" >&2
         dc "$DOCKER_BOUND" logs --tail 40 >&2 2>&1
         fail "docker compose up --wait failed"
-      elif check_running && check_startup_failure && check_runtime_env &&
-        check_image server && check_build_stage; then
-        rc=0
+      elif has_service server; then
+        if check_running && check_startup_failure && check_runtime_env &&
+          check_image server && check_build_stage; then
+          rc=0
+        fi
+      elif has_service web; then
+        if check_web && check_runtime_env && check_image web && check_build_stage; then
+          rc=0
+        fi
+      else
+        fail "docker-compose.yml defines neither a server nor a web service"
       fi
     fi
   fi

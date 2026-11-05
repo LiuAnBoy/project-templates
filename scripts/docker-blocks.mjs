@@ -745,25 +745,58 @@ export function checkNodeMajor(dockerfile, nvmrc, label) {
 }
 
 /**
- * Check that the last `USER` instruction of a Dockerfile, the one the final
- * stage runs with, is a numeric uid other than 0.
+ * Check that the final stage of a Dockerfile runs as a numeric uid other than 0.
+ *
+ * A `USER` instruction counts only inside the stage it appears in, so the user
+ * is reset at every `FROM` and a `USER` of an earlier stage never makes a root
+ * final stage pass.
  *
  * @param {string} dockerfile The Dockerfile.
  * @param {string} label Name of the Dockerfile, for messages.
- * @returns {string[]} A message when there is no `USER`, or it is not numeric or is 0.
+ * @returns {string[]} A message when the final stage has no `USER`, or its last
+ *   `USER` is not numeric or is 0.
  */
 export function checkFinalUser(dockerfile, label) {
-  const users = dockerfile
-    .split('\n')
-    .map((line) => /^\s*USER\s+(\S+)/i.exec(line)?.[1])
-    .filter((user) => user !== undefined);
-  const last = users.at(-1);
-  if (last === undefined) return [`${label}: no USER instruction, so the image runs as root`];
+  let last;
+  for (const line of dockerfile.split('\n')) {
+    if (/^\s*FROM\s/i.test(line)) last = undefined;
+    const user = /^\s*USER\s+(\S+)/i.exec(line)?.[1];
+    if (user !== undefined) last = user;
+  }
+  if (last === undefined) return [`${label}: no USER instruction in the final stage, so the image runs as root`];
   const match = /^(\d+)(?::\d+)?$/.exec(last);
   if (!match || Number(match[1]) === 0) {
     return [`${label}: the last USER is "${last}", expected a numeric uid other than 0`];
   }
   return [];
+}
+
+/** The services that face outward and so read no `env_file`. */
+export const WEB_SERVICES = ['web', 'dashboard'];
+
+/**
+ * Check that no web service of a compose file sets `env_file`. A root `.env` holds
+ * the server's credentials, and the web containers are the ones that face outward,
+ * so their values come from build arguments and `environment` alone.
+ *
+ * @param {string} text A compose file.
+ * @param {string} label Name of the file, for messages.
+ * @returns {string[]} One message per web service that sets `env_file`.
+ */
+export function checkWebEnvFile(text, label) {
+  const lines = text.split('\n');
+  const start = lines.findIndex((line) => /^services:/.test(line));
+  if (start === -1) return [];
+  let end = lines.length;
+  for (let i = start + 1; i < lines.length; i += 1) {
+    if (/^\S/.test(lines[i]) && !lines[i].startsWith('#')) {
+      end = i;
+      break;
+    }
+  }
+  return serviceKeys(lines.slice(start + 1, end))
+    .filter(({ service, key }) => WEB_SERVICES.includes(service) && key === 'env_file')
+    .map(({ service }) => `${label}: service ${service} sets env_file, but a web service reads none`);
 }
 
 /**

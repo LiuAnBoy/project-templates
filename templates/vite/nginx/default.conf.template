@@ -1,0 +1,26 @@
+# Rendered by the nginx image at start: ${API_HOST} is replaced from the
+# environment, nginx's own $variables are left alone.
+
+# Keep the visitor address the proxy in front sent, or send the socket's own.
+# Never append this host's address to it.
+map $http_x_forwarded_for $forwarded_for {
+    default $http_x_forwarded_for;
+    ''      $remote_addr;
+}
+
+server {
+    listen 8080;
+
+    root /usr/share/nginx/html;
+
+    # A fixed upstream, resolved when nginx starts.
+    location /api/ {
+        proxy_pass ${API_HOST};
+        proxy_set_header X-Forwarded-For $forwarded_for;
+    }
+
+    # A single-page app: any other path is answered by index.html.
+    location / {
+        try_files $uri /index.html;
+    }
+}

@@ -29,7 +29,7 @@
 
 ## 環境變數
 
-複製 `.env.example` 為 `.env`。目前只有 `API_HOST`（預設 `http://localhost:8000`），是 `vite.config.ts` 開發與預覽時轉發 `/api` 的目標；正式環境由反向代理轉發。`.env` 已被 git 忽略。
+複製 `.env.example` 為 `.env`。`API_HOST`（預設 `http://localhost:8000`）是 `vite.config.ts` 開發與預覽時轉發 `/api` 的目標；正式環境由反向代理轉發。`.env.example` 若還有 `COMPOSE_PROJECT_NAME`、`DOCKER_API_HOST` 與 `WEB_PORT`，它們只在用 Docker 啟動時才讀，映像裡的 nginx 在啟動時把 `/api/` 轉發到 `DOCKER_API_HOST`。`.env` 已被 git 忽略。
 
 ## 目錄
 
@@ -73,3 +73,11 @@ tests/e2e/        Playwright 規格
 ## 文件語言
 
 `AGENTS.md` 與 `docs/rules/` 用英文，給 AI agent 讀；其餘 `docs/` 頁面用繁體中文，記錄實際存在的內容。新增功能時，把成果記在繁體中文文件裡。
+
+## Docker
+
+專案附有 `Dockerfile`、`docker-compose.yml` 與 `.dockerignore`；啟動前先把 `.env.example` 複製成 `.env`，並替 `COMPOSE_PROJECT_NAME` 填一個在這台機器上不重複的名稱。映像與容器的規則見 `rules/docker.md`。
+
+| 頁面                                 | 內容                                |
+| ------------------------------------ | ----------------------------------- |
+| [`rules/docker.md`](rules/docker.md) | 映像、compose、機密與非 root 的規則 |

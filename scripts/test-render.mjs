@@ -977,9 +977,23 @@ test('guard: the last USER of a Dockerfile is a numeric uid other than 0', async
   const { checkFinalUser } = await import(new URL('./docker-blocks.mjs', import.meta.url).href);
   assert.deepEqual(checkFinalUser('USER root\nFROM x\nUSER 1000:1000\nCMD a\n', 'D'), []);
   assert.deepEqual(checkFinalUser('USER 1000\n', 'D'), []);
+  // Only the final stage counts: a USER of an earlier stage never covers a root one.
+  assert.deepEqual(checkFinalUser('FROM a\nUSER 1000\nFROM b\nCMD x\n', 'D').length, 1);
+  assert.equal(checkFinalUser('FROM a\nUSER 1000\nFROM b\nUSER root\n', 'D').length, 1);
+  assert.deepEqual(checkFinalUser('FROM a AS build\nUSER root\nFROM b\nUSER 101:101\n', 'D'), []);
   for (const bad of ['USER root', 'USER 0', 'USER 0:0', 'USER app', 'USER 1000:1000\nUSER root', '']) {
     assert.equal(checkFinalUser(`FROM x\n${bad}\n`, 'D').length, 1, bad);
   }
+});
+
+test('guard: a web service sets no env_file', async () => {
+  const { checkWebEnvFile } = await import(new URL('./docker-blocks.mjs', import.meta.url).href);
+  const web = 'name: x\nservices:\n  web:\n    build: .\n    ports:\n      - "1:2"\n';
+  assert.deepEqual(checkWebEnvFile(web, 'C'), []);
+  assert.deepEqual(checkWebEnvFile(`${web}  server:\n    env_file: .env\n`, 'C'), []);
+  assert.match(checkWebEnvFile(web.replace('build: .', 'build: .\n    env_file: .env'), 'C')[0], /service web sets env_file/);
+  assert.equal(checkWebEnvFile(`${web}  dashboard:\n    env_file:\n      - .env\n`, 'C').length, 1);
+  assert.deepEqual(checkWebEnvFile('volumes:\n  a: {}\n', 'C'), []);
 });
 
 test('guard: FROM node must match the major of .nvmrc, and exactly one services key', async () => {
@@ -1014,13 +1028,12 @@ test('guard: a server store ships compose.server.fragment.yml, and a Docker laye
     buildDockerLive({ named: ['fastify', 'next-heroui'], frameworks: ['nest', 'fastapi'], stores: ['postgres', 'sqlite'] }),
     ['fastify', 'next-heroui', 'nest-postgres-redis', 'nest-sqlite', 'fastapi-postgres-redis', 'fastapi-sqlite'],
   );
-  assert.deepEqual(DOCKER_LIVE, ['fastify']);
+  assert.deepEqual(DOCKER_LIVE, ['fastify', 'next', 'vite', 'next-heroui']);
 });
 
 test('guard on real output: every Dockerfile, compose file and .dockerignore of templates/ and overlays/ obeys the Docker rules', async () => {
-  const { checkBuildArgs, checkDockerignore, checkFinalUser, checkNodeMajor, checkOneServices } = await import(
-    new URL('./docker-blocks.mjs', import.meta.url).href,
-  );
+  const { checkBuildArgs, checkDockerignore, checkFinalUser, checkNodeMajor, checkOneServices, checkWebEnvFile } =
+    await import(new URL('./docker-blocks.mjs', import.meta.url).href);
   const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
   const problems = [];
   let seen = 0;
@@ -1036,7 +1049,7 @@ test('guard on real output: every Dockerfile, compose file and .dockerignore of 
           const nvmrc = path.join(dir, '.nvmrc');
           if (fs.existsSync(nvmrc)) problems.push(...checkNodeMajor(text(), fs.readFileSync(nvmrc, 'utf8'), rel));
         } else if (/^docker-compose(\..+)?\.yml$/.test(file)) {
-          problems.push(...checkOneServices(text(), rel));
+          problems.push(...checkOneServices(text(), rel), ...checkWebEnvFile(text(), rel));
           if (file === 'docker-compose.yml') {
             seen += 1;
             problems.push(...checkBuildArgs(text(), rel));
@@ -1062,6 +1075,43 @@ test('guard on real output: the guards report a secret argument, a missing ignor
   assert.deepEqual(checkDockerignore(ignore, 'real'), []);
   assert.equal(checkDockerignore(ignore.replace('**/.env\n', ''), 'real').length, 1);
   assert.equal(checkNodeMajor(real, '22\n', 'real').length, 2);
+});
+
+test('guard on real output: the web .env.example holds its old lines unchanged, then only the Docker lines', () => {
+  const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+  const old = {
+    next:
+      '# Where the API listens. Read twice: at build time by next.config.ts (the /api/v1\n' +
+      '# rewrite target) and at runtime by server-side calls. Set it in both places.\n' +
+      'API_HOST=http://localhost:8000\n',
+    vite:
+      '# Where the API listens. Only the dev and preview proxy read it; /api is forwarded here.\n' +
+      'API_HOST=http://localhost:8000\n',
+  };
+  const read = (rel) => fs.readFileSync(path.join(root, rel), 'utf8');
+  const docker = [read('source/docker/main/env.fragment'), read('source/docker/web/env.fragment')]
+    .map((text) => text.replace(/\s+$/, ''))
+    .join('\n\n');
+  for (const framework of Object.keys(old)) {
+    assert.equal(read(`templates/${framework}/.env.example`), `${old[framework]}\n${docker}\n`, framework);
+  }
+  for (const overlay of ['next-antd', 'next-mui', 'next-heroui', 'vite-antd', 'vite-mui', 'vite-heroui']) {
+    const base = overlay.split('-')[0];
+    assert.equal(read(`overlays/${overlay}/.env.example`), read(`templates/${base}/.env.example`), overlay);
+    assert.equal(read(`overlays/${overlay}/docs/README.md`), read(`templates/${base}/docs/README.md`), overlay);
+  }
+});
+
+test('guard on real output: a web service with env_file, and a final stage with no USER, are reported', async () => {
+  const { checkFinalUser, checkWebEnvFile } = await import(new URL('./docker-blocks.mjs', import.meta.url).href);
+  for (const framework of ['next', 'vite']) {
+    const compose = fs.readFileSync(new URL(`../templates/${framework}/docker-compose.yml`, import.meta.url), 'utf8');
+    assert.deepEqual(checkWebEnvFile(compose, framework), []);
+    assert.equal(checkWebEnvFile(compose.replace('    build:', '    env_file: .env\n    build:'), framework).length, 1);
+    const dockerfile = fs.readFileSync(new URL(`../templates/${framework}/Dockerfile`, import.meta.url), 'utf8');
+    assert.deepEqual(checkFinalUser(dockerfile, framework), []);
+    assert.equal(checkFinalUser(dockerfile.replace(/^USER .*$/m, ''), framework).length, 1);
+  }
 });
 
 let failed = 0;

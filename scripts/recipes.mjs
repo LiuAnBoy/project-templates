@@ -17,7 +17,8 @@
  *   server/<name>         framework layer of one backend (nest, fastify, fastapi)
  *   workspace             the monorepo root with the contract package
  *   workspace-no-contract the root of a monorepo whose server is not a Node project
- *   docker/main           the Docker block every backend ships (.dockerignore, rules, env lines)
+ *   docker/main           the Docker block every template ships (.dockerignore, rules, env lines)
+ *   docker/web            the env lines a web base adds (DOCKER_API_HOST, WEB_PORT)
  *   data/compose          the main compose block of a data overlay with a server store
  *   data/integration/<fw> integration test config of one backend
  *   data/sql/<node|fastapi>  what every SQL store shares on that platform
@@ -50,6 +51,8 @@ for (const framework of WEB_FRAMEWORKS) {
     'source/web/common',
     `source/web/${framework}`,
     'source/ui/plain',
+    'source/docker/main',
+    'source/docker/web',
   ];
 }
 
@@ -307,7 +310,7 @@ export function uncoveredDockerLayers(targets, live, dockerLayers) {
  *
  * @type {string[]}
  */
-export const DOCKER_LIVE = ['fastify'];
+export const DOCKER_LIVE = ['fastify', 'next', 'vite', 'next-heroui'];
 
 Object.assign(overlays, dataOverlays);
 

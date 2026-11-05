@@ -141,7 +141,7 @@ FastAPI 的資料庫程式碼有整合測試，但沒有正式環境的使用紀
 
 ## Docker
 
-三個後端範本（`nest`、`fastify`、`fastapi`）各附三個檔案：`Dockerfile`、`docker-compose.yml` 與 `.dockerignore`。映像分兩個階段建置：第一階段依鎖定檔安裝並建置，執行階段只複製建置結果與正式環境的相依套件，以 uid 1000 執行，不含 `.env`、測試與原始碼。
+每個範本（`next`、`vite`、`nest`、`fastify`、`fastapi`，`workspace` 除外）各附三個檔案：`Dockerfile`、`docker-compose.yml` 與 `.dockerignore`。映像分兩個階段建置：第一階段依鎖定檔安裝並建置，執行階段只複製建置結果（後端另加正式環境的相依套件），以非 root 的固定 uid 執行（Vite 的 nginx 映像是 101，其餘是 1000），不含 `.env`、測試與原始碼。
 
 啟動前先把 `.env.example` 複製成 `.env`，並替 `COMPOSE_PROJECT_NAME` 填一個在這台機器上不重複的名稱：
 
@@ -152,8 +152,9 @@ docker compose up -d --build --wait
 
 - `COMPOSE_PROJECT_NAME` 是容器、網路與資料卷的名稱。留空時 compose 會失敗並指出這個變數，兩個專案因此不會共用容器或資料卷，`docker compose down -v` 也不會碰到別的專案。
 - 容器裡的伺服器固定聽 8000；`.env` 的 `PORT` 是本機 `127.0.0.1` 上對應的埠。祕密只透過 `env_file` 與 `environment` 在執行時傳入，不會進入映像。
+- Web 範本的服務叫 `web`，不讀 `env_file`，因為對外的容器不該拿到後端的資料庫帳密。它的值只來自 `.env` 的 `DOCKER_API_HOST`（API 的位置，預設 `http://host.docker.internal:8000`，指向本機上的後端）與 `WEB_PORT`（本機 `127.0.0.1` 上的埠，預設 3000）。Next.js 把 `DOCKER_API_HOST` 當建置參數與執行時的 `API_HOST`；Vite 的 nginx 在容器啟動時才讀它，換 API 位置不必重新建置，但 nginx 啟動時必須解析得到這個主機，否則容器起不來。
 - 不使用 Docker 的專案刪掉這三個檔案即可。`AGENTS.md` 的 Docker 區塊與 `docs/rules/docker.md` 寫成「有這些檔案時」的規則，刪除之後仍然成立。
-- 維護範本時，`bash scripts/check-docker.sh fastify nest fastapi` 會建置映像、在容器裡驗證，並檢查映像沒有祕密、不是以 root 執行；它用 28000 等移動過的埠，不占用其他檢查的埠。沒有 Docker 時結束碼是 3，表示未完成，不是通過。
+- 維護範本時，`bash scripts/check-docker.sh fastify nest fastapi next vite` 會建置映像、在容器裡驗證，並檢查映像沒有祕密、不是以 root 執行；它用 28000、23000 等移動過的埠，不占用其他檢查的埠。沒有 Docker 時結束碼是 3，表示未完成，不是通過。
 
 ## 修改範本
 

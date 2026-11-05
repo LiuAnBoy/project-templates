@@ -1,0 +1,22 @@
+services:
+  web:
+    build:
+      context: .
+      args:
+        API_HOST: ${DOCKER_API_HOST:-http://host.docker.internal:8000}
+    environment:
+      API_HOST: ${DOCKER_API_HOST:-http://host.docker.internal:8000}
+    extra_hosts:
+      - 'host.docker.internal:host-gateway'
+    ports:
+      - '127.0.0.1:${WEB_PORT:-3000}:3000'
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - fetch('http://127.0.0.1:3000/').then((r) => process.exit(Number(r.status !== 200)), () => process.exit(1))
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 10s

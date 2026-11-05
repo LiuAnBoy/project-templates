@@ -29,7 +29,7 @@
 
 ## 環境變數
 
-複製 `.env.example` 為 `.env`。目前只有 `API_HOST`（預設 `http://localhost:8000`），同時有兩個用途：`next.config.ts` 在建置時用它決定 `/api/v1` 的轉發目標；伺服器端程式（server component）在執行時用它組出絕對的 API 網址。部署時兩處都要設定：`pnpm build` 之前，以及 `pnpm start` 的環境。`.env` 已被 git 忽略。
+複製 `.env.example` 為 `.env`。`API_HOST`（預設 `http://localhost:8000`）同時有兩個用途：`next.config.ts` 在建置時用它決定 `/api/v1` 的轉發目標；伺服器端程式（server component）在執行時用它組出絕對的 API 網址。部署時兩處都要設定：`pnpm build` 之前，以及 `pnpm start` 的環境。`.env.example` 若還有 `COMPOSE_PROJECT_NAME`、`DOCKER_API_HOST` 與 `WEB_PORT`，它們只在用 Docker 啟動時才讀，`DOCKER_API_HOST` 同時是映像的建置參數與執行時的 `API_HOST`。`.env` 已被 git 忽略。
 
 ## 目錄
 
@@ -74,3 +74,11 @@ tests/e2e/        Playwright 規格
 ## 文件語言
 
 `AGENTS.md` 與 `docs/rules/` 用英文，給 AI agent 讀；其餘 `docs/` 頁面用繁體中文，記錄實際存在的內容。新增功能時，把成果記在繁體中文文件裡。
+
+## Docker
+
+專案附有 `Dockerfile`、`docker-compose.yml` 與 `.dockerignore`；啟動前先把 `.env.example` 複製成 `.env`，並替 `COMPOSE_PROJECT_NAME` 填一個在這台機器上不重複的名稱。映像與容器的規則見 `rules/docker.md`。
+
+| 頁面                                 | 內容                                |
+| ------------------------------------ | ----------------------------------- |
+| [`rules/docker.md`](rules/docker.md) | 映像、compose、機密與非 root 的規則 |
