@@ -6,7 +6,8 @@
 #       [--dashboard <next|vite> <plain|antd|mui|heroui>] [--data <store>[,redis]]
 #
 # --data picks the data store of the server once, when the project is created:
-# postgres, sqlite, redis, postgres,redis or sqlite,redis (exactly these). It
+# postgres, sqlite, mysql, redis, postgres,redis, sqlite,redis or mysql,redis
+# (exactly these; fastapi takes neither choice with mysql). It
 # extracts the data overlay of the server over server/, so the server brings
 # its store's code, rules, settings, compose file and lockfile. --dashboard and
 # --data come in any order after the four positional words.
@@ -37,7 +38,7 @@ pt_usage() {
   cat >&2 <<'EOF'
 usage: monorepo.sh <project> <next|vite> <plain|antd|mui|heroui> <nest|fastify|fastapi>
                    [--dashboard <next|vite> <plain|antd|mui|heroui>]
-                   [--data <postgres|sqlite|redis|postgres,redis|sqlite,redis>]
+                   [--data <postgres|sqlite|mysql|redis|postgres,redis|sqlite,redis|mysql,redis>]
 EOF
 }
 
@@ -280,7 +281,10 @@ pt_main() {
     pt_choice "$dash_ui" plain antd mui heroui || { pt_fail "unknown dashboard UI choice \"$dash_ui\" (plain, antd, mui or heroui)"; return 2; }
   fi
   if [ "$data_given" -eq 1 ]; then
-    pt_choice "$data" postgres sqlite redis postgres,redis sqlite,redis || { pt_fail "unknown data choice \"$data\" (postgres, sqlite, redis, postgres,redis or sqlite,redis)"; return 2; }
+    pt_choice "$data" postgres sqlite mysql redis postgres,redis sqlite,redis mysql,redis || { pt_fail "unknown data choice \"$data\" (postgres, sqlite, mysql, redis, postgres,redis, sqlite,redis or mysql,redis)"; return 2; }
+    case "$server,$data" in
+      fastapi,mysql | fastapi,mysql,redis) pt_fail "fastapi has no MySQL overlay (nest or fastify)"; return 2 ;;
+    esac
   fi
 
   target="$PWD/$project"

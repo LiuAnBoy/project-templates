@@ -29,8 +29,8 @@
 #   8. node scripts/versions.mjs --stamp, only when nothing was left incomplete
 # Needs network access (package installs), pnpm, uv, git, curl and node, and Docker for
 # the real-store checks. The ports a run uses must be free: 8000 plus the web ports of a
-# composition (3000, 3001, 15173), and 15432 (PostgreSQL) and 16379 (Redis) for the
-# services of the data overlays and of the PostgreSQL composition.
+# composition (3000, 3001, 15173), and 15432 (PostgreSQL), 13306 (MySQL) and 16379
+# (Redis) for the services of the data overlays and of the PostgreSQL composition.
 # The Vite compositions run on 15173 rather than its default 5173, because a Vite dev
 # server is often running for other work on the machine, and the proxy under test does
 # not depend on the port.
@@ -428,6 +428,10 @@ check_refusals() {
     "p next plain nest --data" \
     "p next plain nest --data nope" \
     "p next plain nest --data redis,postgres" \
+    "p next plain nest --data redis,mysql" \
+    "p next plain nest --data mysql,sqlite" \
+    "p next plain fastapi --data mysql" \
+    "p next plain fastapi --data mysql,redis" \
     "p next plain nest --data postgres,sqlite" \
     "p next plain nest --data postgres,redis,redis" \
     "p next plain nest --data redis --data redis" \

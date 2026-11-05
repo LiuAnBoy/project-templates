@@ -68,7 +68,7 @@ pnpm install
 ### 一次建立 monorepo
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/LiuAnBoy/project-templates/master/monorepo.sh | bash -s -- <project> <next|vite> <plain|antd|mui|heroui> <nest|fastify|fastapi> [--dashboard <next|vite> <plain|antd|mui|heroui>] [--data <postgres|sqlite|redis|postgres,redis|sqlite,redis>]
+curl -fsSL https://raw.githubusercontent.com/LiuAnBoy/project-templates/master/monorepo.sh | bash -s -- <project> <next|vite> <plain|antd|mui|heroui> <nest|fastify|fastapi> [--dashboard <next|vite> <plain|antd|mui|heroui>] [--data <postgres|sqlite|mysql|redis|postgres,redis|sqlite,redis|mysql,redis>]
 ```
 
 結果是 `<project>/`，內含 `web/`、`server/`、`docs/`，選 Node 後端時還有 `contract/`；加上 `--dashboard` 會多一個 `dashboard/`，建法與 `web/` 相同；加上 `--data` 會把該資料 overlay 疊在 `server/` 上（見「資料庫」）。`plain` 表示不套用 overlay。
@@ -111,7 +111,7 @@ pnpm dev          # 同時啟動前端（與後台）和 Node 後端
 
 ### 資料 overlay
 
-資料庫在**建立專案時**選一次，以 overlay 疊上去，做法與 UI overlay 相同。Overlay 名稱是 `<後端>-<資料庫>`、`<後端>-<資料庫>-redis` 或 `<後端>-redis`，後端是 `nest`、`fastify` 或 `fastapi`，資料庫是 `postgres` 或 `sqlite`，共十五個。在已取得的後端範本裡執行：
+資料庫在**建立專案時**選一次，以 overlay 疊上去，做法與 UI overlay 相同。Overlay 名稱是 `<後端>-<資料庫>`、`<後端>-<資料庫>-redis` 或 `<後端>-redis`，後端是 `nest`、`fastify` 或 `fastapi`，資料庫是 `postgres` 或 `sqlite`；`mysql` 只有 `nest` 與 `fastify`。共十九個。在已取得的後端範本裡執行：
 
 ```sh
 curl https://codeload.github.com/LiuAnBoy/project-templates/tar.gz/master | tar -xz --strip=3 project-templates-master/overlays/<overlay>
@@ -122,24 +122,25 @@ Overlay 帶來資料庫的程式碼與規則頁、連線設定（`.env.example`�
 專案的啟動順序是：先安裝套件，再把 `.env.example` 複製成 `.env` 並填好 `COMPOSE_PROJECT_NAME`，啟動服務，套用 migration，最後才啟動伺服器。伺服器缺少設定或服務時會拒絕啟動；啟動檢查只確認資料庫連得上（`select 1`），不檢查資料表，所以還沒套用 migration 的伺服器照樣啟動、健康檢查回 200，查詢卻會失敗（SQLite 例外：檔案由 migration 建立，缺檔時拒絕啟動），因此 migration 要在啟動前先做：
 
 ```sh
-cp .env.example .env
-docker compose -f docker-compose.dev.yml up -d --wait   # 只有 PostgreSQL 或 Redis 需要；SQLite 沒有這一步
+cp .env.example .env                                     # 接著填 COMPOSE_PROJECT_NAME，留空時 compose 會拒絕啟動
+docker compose -f docker-compose.dev.yml up -d --wait   # PostgreSQL、MySQL 或 Redis 需要；SQLite 沒有這一步
 pnpm db:migrate                                          # FastAPI：make db-migrate；只有 Redis 時沒有這一步
 pnpm dev                                                 # FastAPI：make dev
 ```
 
-用 `monorepo.sh --data <選擇>` 時，這些步驟會在建立完成後印出來，compose 指令已帶上專案名稱（`-p`），多個專案在同一台機器上不會共用容器與資料卷。`--data` 只接受 `postgres`、`sqlite`、`redis`、`postgres,redis`、`sqlite,redis`，建議這樣選：
+用 `monorepo.sh --data <選擇>` 時，這些步驟會在建立完成後印出來，compose 指令已帶上專案名稱（`-p`），多個專案在同一台機器上不會共用容器與資料卷。`--data` 只接受 `postgres`、`sqlite`、`mysql`、`redis`、`postgres,redis`、`sqlite,redis`、`mysql,redis`，選 `fastapi` 時不接受含 `mysql` 的兩個。建議這樣選：
 
 | 選擇 | 什麼時候用 |
 | ---- | ---------- |
 | `postgres` | 開發與正式都由專案自己的 compose 啟動一個全新的 PostgreSQL；之後只改 `.env` 的四行就能改連已經存在的共用伺服器 |
 | `sqlite` | 只有一個執行個體、不想多一個資料庫服務 |
+| `mysql` | 客戶的環境指定 MySQL，或要接已經存在的 MySQL 資料庫 |
 | `redis` | 只需要快取、鎖或佇列；沒有資料庫 |
-| `postgres,redis`、`sqlite,redis` | 資料庫加上 Redis；速率限制也改用 Redis 計數，讓多個執行個體共用同一個上限 |
+| `postgres,redis`、`sqlite,redis`、`mysql,redis` | 資料庫加上 Redis；速率限制也改用 Redis 計數，讓多個執行個體共用同一個上限 |
 
-整個專案放進容器時（`docker compose up -d --build --wait`），`migrate` 先用伺服器的映像執行 migration，成功後 `server` 才啟動；`migrate` 失敗時 `server` 不會啟動，`up` 回傳非零。容器裡的資料庫網址由 compose 依服務名稱組成，`.env` 的 `DATABASE_URL` 只供在本機執行的伺服器使用，所以 PostgreSQL 的 `POSTGRES_PASSWORD` 必須是 URL 安全字元（英數字與 `-`、`.`、`_`、`~`）。SQLite 的檔案放在具名 volume `sqlite-data`，由 `migrate` 建立。Redis 一律是專案自己的 compose 裡的服務。
+整個專案放進容器時（`docker compose up -d --build --wait`），`migrate` 先用伺服器的映像執行 migration，成功後 `server` 才啟動；`migrate` 失敗時 `server` 不會啟動，`up` 回傳非零。容器裡的資料庫網址由 compose 依服務名稱組成，`.env` 的 `DATABASE_URL` 只供在本機執行的伺服器使用，所以 `POSTGRES_PASSWORD` 與 `MYSQL_PASSWORD` 必須是 URL 安全字元（英數字與 `-`、`.`、`_`、`~`）。SQLite 的檔案放在具名 volume `sqlite-data`，由 `migrate` 建立。Redis 一律是專案自己的 compose 裡的服務。
 
-要改連已經在某個 docker 網路上執行的 PostgreSQL，只改 `.env` 的四行，不改任何程式或 compose 檔：
+要改連已經在某個 docker 網路上執行的 PostgreSQL，先以 `docker compose down` 停止專案，再改 `.env` 的四行，不改任何程式或 compose 檔：
 
 - `COMPOSE_FILE`：改成 `docker-compose.yml:docker-compose.postgres-cluster.yml`。
 - `POSTGRES_DOCKER_NETWORK`：填該伺服器所在的 docker 網路名稱。
@@ -148,7 +149,9 @@ pnpm dev                                                 # FastAPI：make dev
 
 `docker-compose.postgres-cluster.yml` 不含任何網路名稱：它移除本機的 `postgres` 服務，把 `server` 與 `migrate` 接上那個外部網路，並改讀 `.env` 的 `DATABASE_URL`。`POSTGRES_PASSWORD` 仍要保留一個值，改回原本的四行就會回到本機的 PostgreSQL。
 
-FastAPI 的資料庫程式碼有整合測試，但沒有正式環境的使用紀錄。
+MySQL 預設映像是 `mysql:9`，`mysql:8.4` 也跑過同一套真實服務檢查。要接已經有資料表的 MySQL，用 `pnpm db:pull` 從資料庫產生 schema：舊表維持原樣，不硬套 UUID 與 snake_case，新表才照規則；步驟與注意事項（DDL 會自動 commit、MyISAM 沒有交易、大表 `ALTER` 會鎖表、退路是 `mysqldump`）寫在 overlay 的 `docs/rules/mysql.md`。
+
+FastAPI 與 MySQL 的資料庫程式碼有整合測試，但沒有正式環境的使用紀錄。
 
 ## Docker
 
