@@ -12,8 +12,26 @@ import { isDependencyOutage } from '../common/errors/dependency-failure.js';
 export const redisEnv = {
   REDIS_URL: z
     .string()
-    .regex(/^rediss?:\/\//, 'must be a redis:// or rediss:// URL'),
+    .regex(/^rediss?:\/\//, 'must be a redis:// or rediss:// URL')
+    .refine(isUsableUrl, 'must be a valid redis:// or rediss:// URL'),
 };
+
+/**
+ * Whether the driver can read a URL. Building a client that does not connect
+ * parses the URL, and a parser's error quotes what it read, so it stays inside
+ * this check.
+ *
+ * @param url - The raw setting.
+ * @returns True when a client can be built from it.
+ */
+function isUsableUrl(url: string): boolean {
+  try {
+    new Redis(url, { lazyConnect: true });
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 /** What `createRedisClient` reads of the validated environment. */
 export type RedisConfig = { REDIS_URL: string };
@@ -165,7 +183,10 @@ function createConnectionLog(write: (line: string) => void): {
  * late, minutes after the request that sent it was answered. It does not read
  * the environment and assumes nothing about where the server is. Its `error`
  * events are handled here, one line each at most, so a lost connection never
- * ends the process and never prints the URL.
+ * ends the process and never prints the URL. A connection made with
+ * `client.duplicate()`, which a subscriber needs, gets the same listener: ioredis
+ * prints the whole error of a client with none, host and port included. `close`
+ * ends those connections too.
  *
  * @param config - The validated settings.
  * @param options - Timeouts and the log, for tests.
@@ -191,6 +212,14 @@ export function createRedisClient(
   };
   client.once('ready', settled);
   client.once('close', settled);
+  const duplicates = new Set<Redis>();
+  const makeDuplicate = client.duplicate.bind(client);
+  client.duplicate = (...args: Parameters<Redis['duplicate']>): Redis => {
+    const duplicate = makeDuplicate(...args);
+    duplicate.on('error', (error: unknown) => connectionLog.failed(error));
+    duplicates.add(duplicate);
+    return duplicate;
+  };
   client.on('error', (error: unknown) => connectionLog.failed(error));
   client.on('close', () => connectionLog.closed());
   client.on('ready', () => connectionLog.ready());
@@ -213,6 +242,7 @@ export function createRedisClient(
         }
       }
       client.disconnect();
+      for (const duplicate of duplicates) duplicate.disconnect();
     },
   };
 }

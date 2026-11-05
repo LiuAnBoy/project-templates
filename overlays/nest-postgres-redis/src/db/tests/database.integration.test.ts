@@ -1,6 +1,7 @@
 import { sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
+import { isDependencyOutage } from '../../common/errors/dependency-failure.js';
 import { describeFailure } from '../../common/errors/failure.js';
 import { openStore } from '../../../scripts/db/adapter.mjs';
 import {
@@ -129,6 +130,56 @@ describe('postgres database', () => {
     expect(await probe.exists(database.db, 'after-twelve')).toBe(true);
   });
 
+  it('reproduces a timer set inside a run that fires after it ended: it opens its own transaction', async () => {
+    let late: Promise<void> | undefined;
+
+    await database.transactions.run(() => {
+      late = new Promise((resolve) => setTimeout(resolve, 20)).then(() =>
+        database.transactions.run((tx) => probe.insert(tx, 'timer-after')),
+      );
+      return Promise.resolve();
+    });
+    await late;
+
+    expect(await probe.exists(database.db, 'timer-after')).toBe(true);
+  });
+
+  it('refuses work started inside a run while it is still open', async () => {
+    let during: Promise<unknown> | undefined;
+
+    await database.transactions.run(async () => {
+      during = database.transactions
+        .run(() => Promise.resolve())
+        .catch((error: unknown) => error);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+
+    expect(((await during) as Error).message).toMatch(
+      /pass the transaction handle down/,
+    );
+  });
+
+  it('reproduces a connection killed inside a run: the run fails as an outage, the process stays up and the next run works', async () => {
+    const killer = createDatabase({ DATABASE_URL: target.url });
+    const marker = `pg_sleep_kill_${Date.now()}`;
+    const running = database.transactions
+      .run((tx) => tx.execute(sql.raw(`select pg_sleep(10) as ${marker}`)))
+      .catch((caught: unknown) => caught);
+    await new Promise((resolve) => setTimeout(resolve, 300));
+
+    await killer.db.execute(
+      sql.raw(
+        `select pg_terminate_backend(pid) from pg_stat_activity where query like '%${marker}%' and pid <> pg_backend_pid()`,
+      ),
+    );
+    const error = await running;
+    await killer.close();
+
+    expect(isDependencyOutage(error)).toBe(true);
+    await database.transactions.run((tx) => probe.insert(tx, 'after-kill'));
+    expect(await probe.exists(database.db, 'after-kill')).toBe(true);
+  });
+
   it('logs the code and not the quoted value of a data exception under a failed statement', async () => {
     const error = await database.db
       .execute(sql`select ${'SECRET-TOKEN-123'}::int`)
@@ -166,11 +217,26 @@ describe('postgres database', () => {
       await failing.close();
 
       const logged = JSON.stringify(describeFailure(error));
+      expect(isDependencyOutage(error)).toBe(true);
       expect(logged).not.toContain('canary-user');
       expect(logged).not.toContain('canary-pw');
       expect(logged).not.toContain('canary-db');
       expect(logged).toContain(`"code":"${code}`);
     }
+  });
+
+  it('keeps a constraint violation and a syntax error as failures of the statement', async () => {
+    await probe.insert(database.db, 'unique-once');
+
+    const duplicate = await probe
+      .insert(database.db, 'unique-once')
+      .catch((caught: unknown) => caught);
+    const syntax = await database.db
+      .execute(sql`selct 1`)
+      .catch((caught: unknown) => caught);
+
+    expect(isDependencyOutage(duplicate)).toBe(false);
+    expect(isDependencyOutage(syntax)).toBe(false);
   });
 
   it('reproduces a startup option the server refuses: db:migrate and db:status print fixed text, and the log names no option', async () => {

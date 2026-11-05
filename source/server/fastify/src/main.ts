@@ -1,6 +1,7 @@
-import { ZodError } from 'zod';
-
 import { runStartupChecks } from './common/dependency-checks.js';
+import { describeFailure } from './common/errors/failure.js';
+import { describeStartupFailure } from './common/errors/startup-failure.js';
+import { installProcessGuards } from './common/process-guard.js';
 import { loadConfig, type Config } from './config.js';
 import { createStaticGreeter } from './hello/greeter.js';
 import { createHelloModule } from './hello/routes.js';
@@ -12,21 +13,18 @@ import { buildServer } from './server.js';
  * Boots the HTTP process: load config, build the server, listen, and close on
  * shutdown signals. Before it listens, every dependency check of the infra seam
  * runs under `bounded()`; a failed start, a failed check included, exits
- * non-zero after closing what it opened, and a failed check is named, never
- * its value.
+ * non-zero after closing what it opened, and prints `describeStartupFailure`,
+ * which names a setting or a check and never a value.
  *
  * @returns Resolves once the server is listening.
  */
 async function main(): Promise<void> {
+  installProcessGuards();
   let config: Config;
   try {
     config = loadConfig();
   } catch (error) {
-    const detail =
-      error instanceof ZodError
-        ? error.issues.map((i) => i.path.join('.')).join(', ')
-        : String(error);
-    console.error(`invalid configuration: ${detail}`);
+    console.error(describeStartupFailure(error));
     process.exit(1);
   }
 
@@ -58,7 +56,10 @@ async function main(): Promise<void> {
         .then(
           () => process.exit(0),
           (error: unknown) => {
-            server.log.error({ err: error }, 'shutdown failed');
+            server.log.error(
+              { failure: describeFailure(error) },
+              'shutdown failed',
+            );
             process.exit(1);
           },
         );
@@ -69,20 +70,12 @@ async function main(): Promise<void> {
     await runStartupChecks(infra.checks);
     await app.listen({ host: config.HOST, port: config.PORT });
   } catch (error) {
-    if (app) app.log.error({ err: error }, 'failed to start');
-    else
-      console.error(
-        'failed to start:',
-        error instanceof Error ? error.message : error,
-      );
+    console.error(describeStartupFailure(error));
     try {
       await app?.close();
       await infra?.close();
     } catch (closeError) {
-      console.error(
-        'failed to release resources:',
-        closeError instanceof Error ? closeError.message : closeError,
-      );
+      console.error(describeStartupFailure(closeError));
     }
     process.exit(1);
   }

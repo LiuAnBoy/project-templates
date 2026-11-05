@@ -12,10 +12,13 @@
  * nothing, and the message of every failure of the connection layer (a refused
  * or dropped connection, a name that does not resolve, a rejected login or
  * database, a TLS failure) by nothing, because it names the host, the port, the
- * user or the database. A withheld link keeps its class, its code and its frames.
+ * user or the database. So does a system error of any other kind, which names the
+ * file or the address it tried. A withheld link keeps its class, its code and its
+ * frames. A `FixedTextError` keeps its message: we wrote it, and it holds no value.
  */
 import { flattenCauses, read, type Flattened } from './cause-chain.js';
 import { isConnectionLayerFailure } from './dependency-failure.js';
+import { FixedTextError } from './fixed-text-error.js';
 
 /** One link in a chain of causes. */
 export type FailureLink = {
@@ -54,7 +57,7 @@ function stringField(value: unknown, key: string): string | undefined {
  * @param value - The error.
  * @returns Its class name, or a stand-in.
  */
-function nameOf(value: object): string {
+export function nameOf(value: object): string {
   try {
     return (
       (value as { constructor?: { name?: string } }).constructor?.name ??
@@ -78,7 +81,7 @@ function nameOf(value: object): string {
  * @param message - The message the error had when it was thrown.
  * @returns The frames, or an empty string when there are none.
  */
-function framesOf(stack: string, message: string): string {
+export function framesOf(stack: string, message: string): string {
   const at = stack.indexOf(message);
   if (at === -1) return '';
   const rest = stack.slice(at + message.length);
@@ -129,11 +132,16 @@ function describe(
   const stack = stringField(error, 'stack');
   if (stack !== undefined) link.stack = stack;
   const query = stringField(error, 'query');
-  if (isConnectionLayerFailure(error)) {
+  if (error instanceof FixedTextError) {
+    // Text we wrote and fixed: it names the dependency and carries no value.
+  } else if (
+    isConnectionLayerFailure(error) ||
+    typeof read(error, 'syscall') === 'string'
+  ) {
     // The message of a connection-layer failure names the host and port it
-    // tried, the user it logged in as or the database it asked for, and a TLS
-    // failure quotes the certificate's names. The class and the code say what
-    // went wrong.
+    // tried, the user it logged in as or the database it asked for, a TLS failure
+    // quotes the certificate's names, and a system error names its path. The class
+    // and the code say what went wrong.
     link.message = '';
     if (stack !== undefined) link.stack = framesOf(stack, message);
   } else if (query !== undefined && isStatementFailure(error)) {

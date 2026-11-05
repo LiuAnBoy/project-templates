@@ -1,5 +1,3 @@
-import { AsyncLocalStorage } from 'node:async_hooks';
-
 import BetterSqlite3 from 'better-sqlite3';
 import {
   drizzle,
@@ -7,6 +5,8 @@ import {
 } from 'drizzle-orm/better-sqlite3';
 import { z } from 'zod';
 
+import { FixedTextError } from '../common/errors/fixed-text-error.js';
+import { createNestingGuard } from './nesting-guard.js';
 import * as schema from './schema/index.js';
 import type { DatabasePort, TransactionRunner } from './types.js';
 
@@ -16,8 +16,26 @@ import type { DatabasePort, TransactionRunner } from './types.js';
  * the variable, and the message never carries the value.
  */
 export const databaseEnv = {
-  DATABASE_URL: z.string().min(1),
+  DATABASE_URL: z
+    .string()
+    .min(1)
+    .refine(isFilePath, 'must be the path of a database file'),
 };
+
+/**
+ * Refuses what is not the path of a file: `:memory:`, which the two connections
+ * cannot share, and a URI, which is not how this setting names a file.
+ *
+ * @param value - The raw setting.
+ * @returns True for a path.
+ */
+function isFilePath(value: string): boolean {
+  return !(
+    value.startsWith(':') ||
+    value.startsWith('file:') ||
+    value.includes('://')
+  );
+}
 
 /** What `createDatabase` reads of the validated environment: the path of the database file. */
 export type DatabaseConfig = { DATABASE_URL: string };
@@ -55,7 +73,7 @@ const DEFAULT_WRITE_WAIT_MS = 5000;
  * @returns The error.
  */
 function sqliteError(message: string, code: string): Error {
-  return Object.assign(new Error(`sqlite: ${message}`), { code });
+  return new FixedTextError(`sqlite: ${message}`, code);
 }
 
 /**
@@ -147,8 +165,9 @@ function createWriteLock(): {
  * and commits or rolls back, because `better-sqlite3` refuses a transaction whose
  * callback returns a promise and one shared connection would let another request's
  * statement land inside an open transaction across an `await`. A nested `run` is
- * refused at once, because it would wait for a lock its own callback holds and stop
- * every write until a restart: pass the transaction handle down instead.
+ * refused at once (`createNestingGuard`), because it would wait for a lock its own
+ * callback holds and stop every write until a restart: pass the transaction handle
+ * down instead.
  *
  * The files must exist, so this throws, with no path in its message, when the path
  * is wrong. The pragmas are `busy_timeout`, `foreign_keys` and `journal_mode = WAL`.
@@ -178,34 +197,30 @@ export function createDatabase(
   const db: Database = drizzle({ client: reader, schema });
   const tx: DatabaseTransaction = drizzle({ client: writer, schema });
   const lock = createWriteLock();
-  const insideRun = new AsyncLocalStorage<true>();
+  const guard = createNestingGuard('sqlite', 'transaction handle');
 
   const transactions: TransactionRunner<DatabaseTransaction> = {
-    run: async (work) => {
-      if (insideRun.getStore()) {
-        throw new Error(
-          'sqlite: transactions.run was called inside a transaction; pass the transaction handle down instead',
-        );
-      }
-      const release = await lock.acquire(writeWaitMs);
-      try {
-        writer.exec('BEGIN IMMEDIATE');
+    run: (work) =>
+      guard.enter(async () => {
+        const release = await lock.acquire(writeWaitMs);
         try {
-          const result = await insideRun.run(true, () => work(tx));
-          writer.exec('COMMIT');
-          return result;
-        } catch (error) {
+          writer.exec('BEGIN IMMEDIATE');
           try {
-            if (writer.inTransaction) writer.exec('ROLLBACK');
-          } catch {
-            // The original error is the one the caller needs.
+            const result = await work(tx);
+            writer.exec('COMMIT');
+            return result;
+          } catch (error) {
+            try {
+              if (writer.inTransaction) writer.exec('ROLLBACK');
+            } catch {
+              // The original error is the one the caller needs.
+            }
+            throw error;
           }
-          throw error;
+        } finally {
+          release();
         }
-      } finally {
-        release();
-      }
-    },
+      }),
   };
 
   return {

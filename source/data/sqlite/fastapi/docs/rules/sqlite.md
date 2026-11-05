@@ -83,7 +83,8 @@ class OrderService:
 - The store holds two engines. `session_factory` reads through connections that are `query_only`: a write through them fails instead of landing outside a transaction. Every write goes through the runner, and the session the runner passes down is the only writer.
 - The runner's engine has one connection, so the writers of this process take turns, and each transaction begins with `BEGIN IMMEDIATE`, so a read-then-write cannot fail on a lock upgrade. A read through `session_factory` does not see work a transaction has not committed, because the database is in WAL mode.
 - The wait is bounded: past five seconds a writer fails as a busy store, which answers 503. A lock held by another process fails the same way once `busy_timeout` passes.
-- A `run` called from inside another `run` is refused at once, with an error that names the cause, and answers 500 because it is a bug. It would otherwise wait for a connection its own caller holds and stop every write until a restart. Pass the session down instead. The runner stays usable after a refusal or a timeout.
+- A `run` called from inside another open `run` is refused at once, with an error that names the cause, and answers 500 because it is a bug. It would otherwise wait for a connection its own caller holds and stop every write until a restart. Pass the session down instead. The runner stays usable after a refusal or a timeout.
+- A task that `work` starts inherits this refusal for as long as the transaction is open, and it ends with the transaction: a task that runs on after the commit may open a transaction of its own. Start one that needs the data only after `run` returns.
 - Keep a transaction short and never await a slow call, such as an HTTP request, inside it: the writing connection is held for the whole `work`.
 
 ## Rows and types

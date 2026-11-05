@@ -1,20 +1,22 @@
 /**
- * Tells a dependency being down apart from a fault in our own code.
+ * Tells a dependency that cannot be used apart from a fault in our own code.
  *
  * The difference is a 503 against a 500, and they say opposite things: 503
  * means "we are fine, something we need is not, come back", 500 means "we are
  * broken". A client should retry the first and report the second.
  *
- * The check is an allowlist of what only a broken connection produces,
- * wherever it hides in the cause chain: a network errno, a PostgreSQL SQLSTATE
- * of the connection classes, a SQLite code for a database that is busy, locked
- * or cannot be opened, or an error a Redis or PostgreSQL client raises while
- * it has no connection. Anything unrecognised is not an outage, so a new failure mode
- * arrives as a 500 that gets investigated.
+ * The check is an allowlist of what only the connection layer produces, wherever
+ * it hides in the cause chain: a network errno, a PostgreSQL SQLSTATE of the
+ * connection classes, a refused login or database, a TLS failure, a `FATAL` reply
+ * of the server, a SQLite code for a database that is busy, locked or cannot be
+ * opened, or an error a Redis or PostgreSQL client raises while it has no usable
+ * connection. A wrong password is on the list because the answer to a client is the
+ * same as for a server that is down: this request cannot be served and nothing about
+ * it is wrong. A constraint violation, a syntax error and anything unrecognised
+ * are not on the list, so a new failure mode arrives as a 500 that gets investigated.
  *
- * The same codes decide which messages the log withholds (`isConnectionLayerFailure`):
- * the outages above, plus the failures that reach the server but are refused at the
- * connection (a rejected login or database) and the TLS failures.
+ * The codes also decide which messages the log withholds (`isConnectionLayerFailure`).
+ * The fixed messages of `pg` and ioredis count as an outage and stay readable.
  */
 import { flattenCauses, read } from './cause-chain.js';
 
@@ -26,8 +28,12 @@ const ERRNOS: ReadonlySet<string> = new Set([
   'EPIPE',
   'EHOSTUNREACH',
   'ENETUNREACH',
+  'ENETDOWN',
+  'EHOSTDOWN',
+  'ECONNABORTED',
   'ENOTFOUND',
   'EAI_AGAIN',
+  'EPROTO',
 ]);
 
 /** SQLite result codes, with their extended forms, that mean the database is not usable now. */
@@ -43,16 +49,29 @@ const REDIS_OFFLINE_MESSAGES: ReadonlySet<string> = new Set([
   "Stream isn't writeable and enableOfflineQueue options is false",
 ]);
 
+/** The first word of a Redis reply that says the connection is not usable: not logged in, or still loading. */
+const REDIS_UNUSABLE_REPLY = /^(NOAUTH|WRONGPASS|LOADING)\b/;
+
 /**
  * Messages `pg` raises for a connection that ended or never came up. They carry
  * no code, errno or cause, so they are recognised by their fixed text.
  */
 const PG_CONNECTION_MESSAGES: ReadonlySet<string> = new Set([
+  'Connection terminated',
   'Connection terminated unexpectedly',
   'Connection terminated due to connection timeout',
+  'timeout expired',
   'timeout exceeded when trying to connect',
+  'Query read timeout',
   'Client has encountered a connection error and is not queryable',
+  'Client was closed and is not queryable',
+  'Cannot use a pool after calling end on the pool',
+  'The server does not support SSL connections',
+  'There was an error establishing an SSL connection',
 ]);
+
+/** Every failure of `pg`'s login exchange starts with this; a password that is missing is one. */
+const PG_LOGIN_MESSAGE = /^SASL: /;
 
 /** The class name ioredis gives the error of a command that outlived its retries. */
 const REDIS_RETRIES_EXHAUSTED = 'MaxRetriesPerRequestError';
@@ -83,8 +102,9 @@ function isSqliteOutage(code: string): boolean {
 }
 
 /**
- * Whether an error is a client failing because it has no connection: ioredis
- * with no connection, or `pg` whose connection ended or timed out.
+ * Whether an error is a client failing because it has no usable connection:
+ * ioredis with no connection or refused by the server, or `pg` whose connection
+ * ended, timed out or could not log in.
  *
  * These errors carry no errno or code, so they are recognised by their fixed
  * message or class name.
@@ -101,11 +121,13 @@ function isClientOffline(value: object): boolean {
   } catch {
     return false;
   }
+  if (name === REDIS_RETRIES_EXHAUSTED) return true;
+  if (typeof message !== 'string') return false;
   return (
-    name === REDIS_RETRIES_EXHAUSTED ||
-    (typeof message === 'string' &&
-      (REDIS_OFFLINE_MESSAGES.has(message) ||
-        PG_CONNECTION_MESSAGES.has(message)))
+    REDIS_OFFLINE_MESSAGES.has(message) ||
+    PG_CONNECTION_MESSAGES.has(message) ||
+    PG_LOGIN_MESSAGE.test(message) ||
+    (name === 'ReplyError' && REDIS_UNUSABLE_REPLY.test(message))
   );
 }
 
@@ -134,21 +156,6 @@ function codesOf(value: object): string[] {
   return ['code', 'sqlState']
     .map((key) => read(value, key))
     .filter((code): code is string => typeof code === 'string');
-}
-
-/**
- * Decides whether one link of the chain is a connection failure.
- *
- * @param value - One error in the chain.
- * @returns Whether this link says the dependency is unreachable.
- */
-function linkIsOutage(value: unknown): boolean {
-  if (typeof value !== 'object' || value === null) return false;
-  const found = codesOf(value).some(
-    (code) =>
-      ERRNOS.has(code) || isConnectionSqlState(code) || isSqliteOutage(code),
-  );
-  return found || isClientOffline(value);
 }
 
 /**
@@ -181,7 +188,18 @@ export function isConnectionLayerFailure(value: unknown): boolean {
 }
 
 /**
- * Whether a thrown value means a dependency is unreachable.
+ * Decides whether one link of the chain says the dependency cannot be used.
+ *
+ * @param value - One error in the chain.
+ * @returns True for a connection-layer failure and for a client with no usable connection.
+ */
+function linkIsOutage(value: unknown): boolean {
+  if (typeof value !== 'object' || value === null) return false;
+  return isConnectionLayerFailure(value) || isClientOffline(value);
+}
+
+/**
+ * Whether a thrown value means a dependency cannot be used.
  *
  * @param error - Whatever was thrown.
  * @returns True when any link of its cause chain is a connection failure.

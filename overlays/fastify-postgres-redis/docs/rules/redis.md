@@ -5,7 +5,8 @@ Redis holds disposable or coordination state: caches, locks, pub/sub messages an
 ## Connection and keys
 
 - `src/redis/client.ts` is the one file that names the Redis client. `createRedisClient(config)` returns the client, a probe and a close from a URL in the env schema (`REDIS_URL`); the `src/infra/` seam calls it once. No host or credential in code. Reuse the client; never open one per request.
-- The client has no offline queue and a capped reconnect delay. While it holds no connection every command fails at once with an error the shared classifier answers as 503, instead of waiting in memory and running late. Its `error` events are handled and logged as one line with the code and never the URL, so a lost connection neither ends the process nor leaks the credential.
+- A missing `REDIS_URL`, or one the client cannot read (a port that is not a number or out of range, an unparsable host), stops the boot naming the variable and never the value.
+- The client has no offline queue and a capped reconnect delay. While it holds no connection every command fails at once with an error the shared classifier answers as 503, instead of waiting in memory and running late. A wrong password answers 503 the same way. Its `error` events are handled and logged as one line with the code and never the URL, so a lost connection neither ends the process nor leaks the credential.
 - Start-up checks the connection with a real `PING`: if Redis cannot be reached the server does not start and says `redis`, never a value. After start-up the health route answers 503 while Redis is lost and 200 again once the client has reconnected.
 - Key shape for your own keys: `<service>:<entity>:<id>[:<facet>]`, lower case, colon separated, for example `shop:product:42:detail`. The service prefix keeps services sharing one Redis apart. Change `REDIS_KEY_PREFIX` of `src/redis/client.ts` (`app`) to the project's name once, and use it for your own keys too.
 - The template writes its rate-limit counters under that prefix too, each with a TTL, and the shape depends on the framework. Fastify's are `app:rate-limit:<scope>:<client>`. Nest's come from `@nest-lab/throttler-storage-redis`, which wraps every key it is given in a hash tag and adds the throttler's name, so they are `{app:rate-limit:default:<client>:default}:hits` and `{app:rate-limit:default:<client>:default}:blocked`: they contain the prefix and do not start with it. They expire by themselves; to find them, match `*app:rate-limit:*`.
@@ -27,7 +28,7 @@ Rules: the TTL is the staleness bound, so choose it from how stale the answer ma
 
 - Channel names follow the key shape: `<service>:<event>`.
 - Pub/sub is fire-and-forget: a subscriber that is down misses the message. Use it for live fan-out (websocket push, cache invalidation hints), not for work that must happen; use a queue for that.
-- A subscriber needs its own connection; a connection in subscribe mode cannot run other commands.
+- A subscriber needs its own connection; a connection in subscribe mode cannot run other commands. Make it with `client.duplicate({ enableOfflineQueue: true })`: a duplicate copies the client's settings, and without the option its first `subscribe` fails until it has connected. The factory gives a duplicate the client's `error` listener and ends it in `close`, so a lost connection neither prints the host nor outlives the process. Never create a second `new Redis` by hand: ioredis prints the whole error of a client with no listener.
 - Publish after the database transaction commits.
 
 ## Locks

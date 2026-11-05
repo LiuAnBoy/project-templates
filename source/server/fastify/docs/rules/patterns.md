@@ -80,8 +80,8 @@ Read-then-write does not stop concurrency: two requests both read "not there yet
 
 ## A dependency is down
 
-- The answer is 503, not 500, so the client retries. `isDependencyOutage` classifies by what only a broken connection produces (a network errno or a connection-class SQLSTATE), wherever it hides in the cause chain; anything unrecognised stays a 500 that gets investigated.
-- Every call to a dependency on the request path has a deadline: wrap it in `bounded(work, ms, 'name')`. Clients of a dead dependency wait instead of failing, and a request that never finishes reads as "still working" and holds a connection until the pool is gone.
-- Say it once. A reconnecting client must not print a stack trace per retry; own the client, listen for its error event, and log the outage a single time.
+- The answer is 503, not 500, so the client retries. `isDependencyOutage` classifies by what only the connection layer produces (a network errno, a connection-class SQLSTATE, a rejected login or database, a TLS failure, a client with no usable connection), wherever it hides in the cause chain; anything unrecognised stays a 500 that gets investigated.
+- Every call to a dependency on the request path has a deadline: wrap it in `bounded(work, ms, 'name')`. Clients of a dead dependency wait instead of failing, and a request that never finishes reads as "still working" and holds a connection until the pool is gone. The deadline ends the wait and not the work (`data.md`).
+- Say it once. A reconnecting client must not print a stack trace per retry; own the client, listen for its error event, and log the outage a single time. An emitter a driver hands out needs its own listener for as long as it lives: with none, a lost connection ends the process.
 - Rate limiting and other fail-closed checks that depend on Redis answer 503 when Redis is down, instead of hanging every endpoint.
-- Log the whole cause chain (`describeFailure`), because the top-level message of a driver error is usually useless. The answer to the client stays the fixed text.
+- Log the whole cause chain (`describeFailure`), because the top-level message of a driver error is usually useless. The answer to the client stays the fixed text. A message that is ours and fixed goes in a `FixedTextError`, the one error the log prints whatever its code says. Nothing started before the server listens prints a thrown message: `describeStartupFailure` prints the shape.

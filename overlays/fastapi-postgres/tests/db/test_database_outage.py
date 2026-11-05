@@ -157,3 +157,97 @@ def test_the_probe_and_the_runner_fail_once_the_database_is_closed() -> None:
             await database.probe()
 
     asyncio.run(attempt())
+
+
+def _message(kind: bytes, body: bytes) -> bytes:
+    """One message of the PostgreSQL protocol."""
+    return kind + (len(body) + 4).to_bytes(4, "big") + body
+
+
+async def _refuse_with(
+    state: str, text: str, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
+) -> None:
+    """Answer a TLS request with no, and a login with a FATAL reply."""
+    while True:
+        data = await reader.read(1024)
+        if not data:
+            return
+        if len(data) == 8:
+            writer.write(b"N")
+            await writer.drain()
+            continue
+        fields = f"SFATAL\0VFATAL\0C{state}\0M{text}\0\0".encode()
+        writer.write(_message(b"E", fields))
+        await writer.drain()
+        writer.close()
+        return
+
+
+def _probe_error(url: str) -> BaseException:
+    """Fail the probe against a URL, through the real client, and return the error."""
+
+    async def attempt() -> BaseException:
+        database = create_database(SimpleNamespace(database_url=url))
+        try:
+            await database.probe()
+        except Exception as error:
+            return error
+        finally:
+            await database.close()
+        raise AssertionError("the probe did not fail")
+
+    return asyncio.run(attempt())
+
+
+def _error_from(state: str, text: str, query: str = "") -> BaseException:
+    """Run the probe against a server that refuses the login in one way."""
+
+    async def attempt() -> BaseException:
+        async def handler(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+            await _refuse_with(state, text, reader, writer)
+
+        server, url = await _fake_server(handler)
+        database = create_database(SimpleNamespace(database_url=url + query))
+        try:
+            await database.probe()
+        except Exception as error:
+            return error
+        finally:
+            await database.close()
+            server.close()
+        raise AssertionError("the probe did not fail")
+
+    return asyncio.run(attempt())
+
+
+@pytest.mark.parametrize(
+    ("state", "text", "note"),
+    [
+        ("28P01", 'password authentication failed for user "secret-user"', "SQLSTATE 28P01"),
+        ("3D000", 'database "secret-db" does not exist', "SQLSTATE 3D000"),
+    ],
+)
+def test_a_refused_login_is_an_outage_and_the_log_tells_it_from_a_lost_network(
+    state: str, text: str, note: str
+) -> None:
+    error = _error_from(state, text)
+
+    logged = format_failure(error)
+
+    assert is_dependency_outage(error)
+    assert f"[{note}]" in logged
+    for secret in (*SECRETS, "secret-user"):
+        assert secret not in logged
+
+
+def test_a_closed_port_logs_its_errno_and_not_a_note_about_a_login() -> None:
+    logged = format_failure(_probe_error(CLOSED_PORT_URL))
+
+    assert "[ECONNREFUSED]" in logged
+
+
+def test_a_server_that_refuses_tls_is_an_outage() -> None:
+    error = _error_from("28P01", "unused", "?sslmode=require")
+
+    assert is_dependency_outage(error)
+    assert "[TLS]" in format_failure(error)

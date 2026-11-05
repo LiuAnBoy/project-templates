@@ -48,7 +48,8 @@ Two revisions generated on separate branches both descend from the same parent, 
 
 - SQL appears only in repositories. Routers and services never build a query. A query has one place to review and to change when the schema moves.
 - The service owns the transaction scope. It opens the transaction with the runner from `create_database`, `transactions.run(work)` (`infra.transactions`), passes the session explicitly to every repository call inside it, and the transaction commits when `work` returns and rolls back when it raises. The commit happens inside the service call, so a commit failure surfaces in the request and becomes a proper failure answer.
-- A `run` called from inside another `run` is refused at once with a `RuntimeError` that names the cause, and answers 500 because it is a bug. It would otherwise take a second connection and wait for a lock its own caller holds, or use up the pool when several requests nest together. Pass the session down instead. The outer transaction rolls back when the refusal propagates and commits when its work catches it, and the next `run` works as usual.
+- A `run` called from inside another open `run` is refused at once with a `RuntimeError` that names the cause, and answers 500 because it is a bug. It would otherwise take a second connection and wait for a lock its own caller holds, or use up the pool when several requests nest together. Pass the session down instead. The outer transaction rolls back when the refusal propagates and commits when its work catches it, and the next `run` works as usual.
+- A task that `work` starts inherits this refusal for as long as the transaction is open, and it ends with the transaction: a task that runs on after the commit may open a transaction of its own. Start one that needs the data only after `run` returns.
 - A repository method takes the session as its first argument after `self`; one that writes takes the caller's session as a required parameter and never opens a session itself.
 - A read-only service method may open a session of `session_factory` without a transaction.
 - Queue and cache side effects run after `run` returns, because they cannot join the transaction.
@@ -84,6 +85,10 @@ class OrderService:
 ```
 
 Tests run the service against a real database, in a throwaway schema of its own; the integration tests pin the target to `TEST_DATABASE_URL` and refuse a non-local host, so a stray shell variable can never point the suite at a real database.
+
+### On a server that went silent
+
+`bounded()` answers at its deadline, also while `psycopg` is busy cancelling. On a cancelled statement `psycopg` sends the server a cancel, waits up to five seconds for that and five more for the statement to end, then closes the connection and logs `query cancellation failed` and `query not terminated after cancellation`. So work that `bounded()` abandoned holds its connection for about ten seconds more. A statement nothing cancelled waits for as long as `data.md` says.
 
 ## Rows and types
 

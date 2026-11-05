@@ -9,8 +9,10 @@ from db_support import Probe, database_with_probe
 from local_target import require_local_url
 from loguru import logger
 from sqlalchemy import text
+from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from core.bounded import bounded
 from core.dependency import is_dependency_outage
 from core.failure import format_failure
 from core.logging import configure_logging
@@ -158,6 +160,138 @@ def test_twelve_concurrent_nested_calls_are_each_refused_and_the_pool_still_serv
         assert await _read(database, probe, "after-twelve")
 
     _scenario(body)
+
+
+def test_a_task_started_inside_a_run_that_runs_after_it_ended_opens_its_own() -> None:
+    async def body(database: DatabasePort, probe: Probe) -> None:
+        async def later() -> None:
+            await asyncio.sleep(0.05)
+            await database.transactions.run(lambda session: probe.insert(session, "task-after"))
+
+        tasks: list[asyncio.Task[None]] = []
+
+        async def work(_session: AsyncSession) -> None:
+            tasks.append(asyncio.create_task(later()))
+
+        await database.transactions.run(work)
+        await tasks[0]
+
+        assert await _read(database, probe, "task-after")
+
+    _scenario(body)
+
+
+def test_a_task_started_inside_a_run_and_running_while_it_is_open_is_refused() -> None:
+    async def body(database: DatabasePort, _probe: Probe) -> None:
+        tasks: list[asyncio.Task[None]] = []
+
+        async def nested() -> None:
+            await database.transactions.run(lambda _session: asyncio.sleep(0))
+
+        async def work(_session: AsyncSession) -> None:
+            tasks.append(asyncio.create_task(nested()))
+            await asyncio.sleep(0.05)
+
+        await database.transactions.run(work)
+
+        with pytest.raises(RuntimeError, match="called inside a transaction"):
+            await tasks[0]
+
+    _scenario(body)
+
+
+def test_a_connection_killed_inside_a_run_is_an_outage_and_the_next_run_works() -> None:
+    async def body(database: DatabasePort, probe: Probe) -> None:
+        marker = f"pg_sleep_kill_{int(time.monotonic() * 1000)}"
+
+        async def sleeper(session: AsyncSession) -> None:
+            await session.execute(text(f"select pg_sleep(10) as {marker}"))
+
+        running = asyncio.ensure_future(database.transactions.run(sleeper))
+        await asyncio.sleep(0.3)
+        async with database.session_factory() as session:
+            await session.execute(
+                text(
+                    "select pg_terminate_backend(pid) from pg_stat_activity "
+                    f"where query like '%{marker}%' and pid <> pg_backend_pid()"
+                )
+            )
+
+        with pytest.raises(Exception) as raised:
+            await running
+
+        assert is_dependency_outage(raised.value)
+        assert "SQLSTATE 57P01" in format_failure(raised.value)
+        await database.transactions.run(lambda session: probe.insert(session, "after-kill"))
+        assert await _read(database, probe, "after-kill")
+
+    _scenario(body)
+
+
+class _Proxy:
+    """A TCP proxy in front of the database that can go silent, as a paused server does."""
+
+    def __init__(self, host: str, port: int) -> None:
+        self._target = (host, port)
+        self.silent = False
+        self._server: asyncio.Server | None = None
+
+    async def start(self) -> int:
+        self._server = await asyncio.start_server(self._serve, "127.0.0.1", 0)
+        return self._server.sockets[0].getsockname()[1]
+
+    def stop(self) -> None:
+        if self._server is not None:
+            self._server.close()
+
+    async def _pump(self, source: asyncio.StreamReader, sink: asyncio.StreamWriter) -> None:
+        while data := await source.read(65536):
+            while self.silent:
+                await asyncio.sleep(0.05)
+            sink.write(data)
+            await sink.drain()
+
+    async def _serve(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        while self.silent:
+            await asyncio.sleep(0.05)
+        upstream_reader, upstream_writer = await asyncio.open_connection(*self._target)
+        await asyncio.gather(
+            self._pump(reader, upstream_writer),
+            self._pump(upstream_reader, writer),
+            return_exceptions=True,
+        )
+
+
+def test_a_silent_server_answers_within_the_bound_and_the_abandoned_probe_frees_its_slot() -> None:
+    async def run() -> None:
+        url = make_url(require_local_url("TEST_DATABASE_URL"))
+        proxy = _Proxy(url.host or "127.0.0.1", url.port or 5432)
+        port = await proxy.start()
+        proxied = url.set(host="127.0.0.1", port=port).render_as_string(hide_password=False)
+        database = create_database(SimpleNamespace(database_url=proxied))
+        pool = database.session_factory.kw["bind"].pool
+        try:
+            await database.probe()
+            proxy.silent = True
+
+            started = time.monotonic()
+            with pytest.raises(TimeoutError):
+                await bounded(database.probe(), 1.0, "postgres")
+            assert time.monotonic() - started < 1.5
+
+            deadline = time.monotonic() + 15
+            while pool.checkedout() > 0 and time.monotonic() < deadline:
+                await asyncio.sleep(0.1)
+            assert pool.checkedout() == 0
+
+            proxy.silent = False
+            await database.probe()
+        finally:
+            proxy.silent = False
+            await database.close()
+            proxy.stop()
+
+    asyncio.run(run())
 
 
 def test_a_failed_statement_logs_no_bound_value_and_no_quoting_driver_message() -> None:

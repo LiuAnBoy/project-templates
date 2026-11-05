@@ -22,7 +22,9 @@
 #      (Node) or a `db-migrate` target (Python).
 #   5. Empty environment: the server exits non-zero and names every connection
 #      variable; then with HOST set to a sentinel and the settings still missing,
-#      the same, and the sentinel is not in the output.
+#      the same, and the sentinel is not in the output. Each connection URL made
+#      malformed in turn (a port that is no number): the same, one setting named at
+#      a time, and no part of the value in the output.
 #   6. Boot: live-check.sh boots from `.env` after migrating (LIVE_DOTENV and
 #      LIVE_PREPARE) and asserts hello, the 404 and health.
 #   7. Store down at startup: with each service stopped in turn, or on SQLite
@@ -499,6 +501,24 @@ step5_empty_env() {
     fail_log "$WORK/sentinel.log" "the startup error prints the value of another setting (HOST)" || return 1
   fi
   say "an empty environment is refused, names $(echo $CONN_VARS), and leaks no value"
+  for name in $CONN_VARS; do
+    value="$(env_value "$PROJ/.env" "$name")"
+    case "$value" in
+      *://*) ;;
+      *) continue ;;
+    esac
+    RUN_ENV=("$name=${value%%://*}://:zqcanarypw@zqcanaryhost:zqcanaryport/zqcanarydb")
+    run_bounded "$STORE_BOUND" "$WORK/malformed.log" $START_CMD
+    RUN_ENV=()
+    if [ "$BOUND_RC" -eq 124 ]; then fail_log "$WORK/malformed.log" "the server kept running with a malformed $name" || return 1; fi
+    if [ "$BOUND_RC" -eq 0 ]; then fail_log "$WORK/malformed.log" "the server exited 0 with a malformed $name" || return 1; fi
+    grep -Fq -- "$name" "$WORK/malformed.log" || { fail_log "$WORK/malformed.log" "the startup error does not name $name" || return 1; }
+    if grep -Fq -- zqcanary "$WORK/malformed.log"; then
+      echo "FAIL: the startup error prints the value of a malformed $name" >&2
+      return 1
+    fi
+    say "a malformed $name is refused, naming it and leaking no part of it"
+  done
 }
 
 # step6_boot: boot from `.env` after migrating and assert the routes.

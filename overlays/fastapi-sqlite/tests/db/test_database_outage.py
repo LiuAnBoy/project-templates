@@ -92,3 +92,65 @@ def test_a_setting_that_is_not_a_file_path_is_refused(path: str) -> None:
         DatabaseSettings(database_url=path)
 
     assert path not in str(raised.value)
+
+
+def test_a_task_started_inside_a_run_that_runs_after_it_ended_opens_its_own(tmp_path: Path) -> None:
+    file = tmp_path / "task.db"
+    sqlite3.connect(file).close()
+
+    async def run() -> str:
+        database = create_database(_config(file))
+        tasks: list[asyncio.Task[str]] = []
+
+        async def later() -> str:
+            await asyncio.sleep(0.05)
+
+            async def own(_session: object) -> str:
+                return "opened"
+
+            return await database.transactions.run(own)
+
+        async def work(_session: object) -> None:
+            tasks.append(asyncio.create_task(later()))
+
+        try:
+            await database.transactions.run(work)
+            return await tasks[0]
+        finally:
+            await database.close()
+
+    assert asyncio.run(run()) == "opened"
+
+
+def test_a_task_started_inside_a_run_and_running_while_it_is_open_is_refused(
+    tmp_path: Path,
+) -> None:
+    file = tmp_path / "during.db"
+    sqlite3.connect(file).close()
+
+    async def run() -> None:
+        database = create_database(_config(file))
+        tasks: list[asyncio.Task[None]] = []
+
+        async def nested() -> None:
+            await database.transactions.run(lambda _session: asyncio.sleep(0))
+
+        async def work(_session: object) -> None:
+            tasks.append(asyncio.create_task(nested()))
+            await asyncio.sleep(0.05)
+
+        try:
+            await database.transactions.run(work)
+            with pytest.raises(RuntimeError, match="called inside a transaction"):
+                await tasks[0]
+        finally:
+            await database.close()
+
+    asyncio.run(run())
+
+
+def test_the_code_of_an_unopenable_file_is_kept_in_the_log(tmp_path: Path) -> None:
+    logged = format_failure(_fails(tmp_path / "missing.db", "probe"))
+
+    assert "[SQLITE_CANTOPEN]" in logged
+    assert str(tmp_path) not in logged

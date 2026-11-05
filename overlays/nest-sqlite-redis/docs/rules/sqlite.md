@@ -4,8 +4,8 @@ SQLite is accessed through Drizzle on `better-sqlite3`. The Drizzle schema, writ
 
 ## Connection settings
 
-- The server reads `DATABASE_URL`, the path of the database file, relative to the directory the server starts in. A missing value stops the boot, naming the variable.
-- The file must already exist. Only `pnpm db:migrate` creates it, so a wrong path stops the boot, naming the dependency and never the path, instead of starting an empty database. `:memory:` is not supported, because the store holds two connections.
+- The server reads `DATABASE_URL`, the path of the database file, relative to the directory the server starts in. A missing value, or one that is not a path (`:memory:`, a URI), stops the boot naming the variable. `:memory:` is not supported, because the store holds two connections.
+- The file must already exist. Only `pnpm db:migrate` creates it, so a wrong path stops the boot, naming the dependency and never the path, instead of starting an empty database.
 - `src/db/database.ts` is the one file that names SQLite. It exports `createDatabase(config)`, which returns the Drizzle client, the transaction runner, a probe and a close, and the `src/infra/` seam calls it once. Never open the file a second time from application code.
 - The `data/` folder holds the file and has its own `.gitignore`, so the database is never committed. Back it up with `VACUUM INTO` or the `.backup` command, never by copying the file alone: WAL mode keeps recent writes in the `-wal` file beside it.
 
@@ -50,7 +50,9 @@ Drizzle's migrator applies a migration only when its journal `when` is newer tha
 - The client's connection is `query_only`: a write through it fails instead of landing outside a transaction. Every write goes through the runner, and the handle the runner passes down is the only writer.
 - A read through the client does not see work a transaction has not committed, because the database is in WAL mode.
 - A second `run` waits for the first, so writes serialise. The wait is bounded: past `writeWaitMs` (5 seconds) it fails as a busy store, which answers 503.
-- A `run` called from inside another `run` is refused at once, with an error that names the cause, and answers 500 because it is a bug. It would otherwise wait for a lock its own callback holds and stop every write until a restart. Pass the handle down instead. The lock stays usable after a refusal or a timeout.
+- A `run` called from inside another open `run` is refused at once, with an error that names the cause, and answers 500 because it is a bug. It would otherwise wait for a lock its own callback holds and stop every write until a restart. Pass the handle down instead. The lock stays usable after a refusal or a timeout.
+- A timer or a promise that the callback starts inherits this refusal for as long as the transaction is open, and it ends with the transaction: code that runs on after the commit may open a transaction of its own. Start work that needs the data only after `run` returns.
+- `better-sqlite3` is synchronous. `BEGIN IMMEDIATE` on a file another process holds the write lock of blocks the event loop, every request included, for up to `busyTimeoutMs` (5 seconds), and `bounded()` cannot end that. So a process that writes to the file, a migration included, runs while the server is stopped or idle.
 - Keep a transaction short and never await a slow call, such as an HTTP request, inside it: the writing connection is held for the whole callback.
 - Queue and cache side effects run after the transaction commits, because they cannot join it.
 

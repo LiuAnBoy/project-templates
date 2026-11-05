@@ -31,6 +31,10 @@ export async function openStore() {
     max: 1,
     connectionTimeoutMillis: 10_000,
   });
+  // A lost connection fails the statement it was running, which reports it. With no
+  // listener it would end the process and print the error as it is, address included.
+  pool.on('connect', (client) => client.on('error', () => undefined));
+  pool.on('error', () => undefined);
   const db = drizzle({ client: pool });
   return {
     table: QUALIFIED_TABLE,

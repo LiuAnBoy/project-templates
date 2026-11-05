@@ -1,25 +1,71 @@
 """Application entry point: build the app and, when run directly, serve it."""
 
-from collections.abc import AsyncIterator
+import asyncio
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 
 import uvicorn
 from fastapi import FastAPI
 from loguru import logger
 
+from core.bounded import bounded
 from core.config import Settings, settings
 from core.dependency_checks import HealthProbe, run_startup_checks
 from core.handlers import register_handlers
-from core.logging import configure_logging
+from core.logging import configure_logging, log_stray_failure
 from core.middleware import RequestContextMiddleware
 from core.rate_limit import RateLimitMiddleware, create_memory_storage, parse_trusted_proxies
 from health.router import HEALTH_PATH
 from health.router import router as health_router
 from hello.router import router as hello_router
 from infra.infra import create_infra
+from infra.types import Infra
 
 #: The prefix of every route.
 API_PREFIX = "/api/v1"
+
+#: How long closing what the process depends on may take, in seconds.
+CLOSE_TIMEOUT_SECONDS = 2.0
+
+#: How long a graceful shutdown waits for the requests in flight, in seconds. A request
+#: waiting on a server that went silent never finishes on its own.
+SHUTDOWN_DEADLINE_SECONDS = 10
+
+
+async def _close_infra(close: Callable[[], Awaitable[None]]) -> None:
+    """Release the infrastructure, under a deadline, and log a failure.
+
+    A silent store cannot stop the process from ending, and an error raised from a
+    lifespan is printed raw by the server, so it is logged here instead.
+
+    Args:
+        close: The close function of the seam.
+    """
+    try:
+        await bounded(close(), CLOSE_TIMEOUT_SECONDS, "closing the infrastructure")
+    except Exception as error:
+        logger.opt(exception=error).error("closing the infrastructure failed")
+
+
+def _build_infra(config: Settings) -> Infra:
+    """Build the seam, keeping what its error quotes out of the traceback.
+
+    A factory reads the settings, so its error can quote one. Nothing else is listening
+    yet, and this traceback reaches the console unfiltered, so it names the class alone.
+
+    Args:
+        config: The process configuration.
+
+    Returns:
+        What the process depends on.
+
+    Raises:
+        RuntimeError: When a factory fails.
+    """
+    try:
+        return create_infra(config)
+    except Exception as error:
+        raise RuntimeError(f"failed to build the infrastructure: {type(error).__name__}") from None
 
 
 def create_app(config: Settings = settings) -> FastAPI:
@@ -43,7 +89,7 @@ def create_app(config: Settings = settings) -> FastAPI:
         The configured application.
     """
     configure_logging(config.log_level)
-    infra = create_infra(config)
+    infra = _build_infra(config)
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
@@ -51,7 +97,8 @@ def create_app(config: Settings = settings) -> FastAPI:
 
         A failed check raises before the server listens, so uvicorn exits
         non-zero naming the check and never a value; a store lost after
-        startup answers 503 and does not end the process.
+        startup answers 503 and does not end the process. What the event loop finds
+        nobody handling is logged through ``core.failure``.
 
         Args:
             _app: The application.
@@ -59,15 +106,16 @@ def create_app(config: Settings = settings) -> FastAPI:
         Yields:
             Once the checks have passed.
         """
+        asyncio.get_running_loop().set_exception_handler(log_stray_failure)
         try:
             await run_startup_checks(infra.checks)
         except BaseException:
-            await infra.close()
+            await _close_infra(infra.close)
             raise
         try:
             yield
         finally:
-            await infra.close()
+            await _close_infra(infra.close)
 
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
     app.state.health_probe = HealthProbe(
@@ -102,6 +150,7 @@ if __name__ == "__main__":
         port=settings.port,
         log_config=None,
         access_log=False,
+        timeout_graceful_shutdown=SHUTDOWN_DEADLINE_SECONDS,
         # TRUST_PROXY is the one place that decides which forwarded address counts.
         proxy_headers=False,
     )

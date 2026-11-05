@@ -1,8 +1,9 @@
 """Process configuration, read once from the environment."""
 
+import sys
 from typing import Literal
 
-from pydantic import Field, field_validator
+from pydantic import Field, ValidationError, field_validator
 from pydantic_settings import SettingsConfigDict
 
 from core.rate_limit import parse_trusted_proxies
@@ -37,7 +38,7 @@ class Settings(InfraSettings):
     )
 
     host: str = "0.0.0.0"
-    port: int = 8000
+    port: int = Field(default=8000, ge=1, le=65535)
     log_level: Literal["TRACE", "DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
     rate_limit_max: int = Field(default=300, ge=1)
     rate_limit_window_seconds: int = Field(default=60, ge=1)
@@ -58,4 +59,24 @@ class Settings(InfraSettings):
         return value
 
 
-settings = Settings()
+def load_settings() -> Settings:
+    """Read the settings, or end the process naming what is wrong.
+
+    The process cannot serve without them, so a failure prints one line with the
+    names of the settings and never a value, and exits non-zero.
+
+    Returns:
+        The validated settings.
+
+    Raises:
+        SystemExit: With status 1 when a setting is missing or malformed.
+    """
+    try:
+        return Settings()
+    except ValidationError as error:
+        names = dict.fromkeys(str(issue["loc"][0]).upper() for issue in error.errors())
+        print(f"invalid configuration: {', '.join(names)}", file=sys.stderr)
+    raise SystemExit(1)
+
+
+settings = load_settings()

@@ -1,5 +1,6 @@
 import json
 import sqlite3
+import ssl
 
 import pytest
 from fastapi.testclient import TestClient
@@ -179,3 +180,27 @@ def test_a_psycopg_connect_timeout_is_an_outage() -> None:
 
 def test_a_sqlalchemy_pool_timeout_is_an_outage() -> None:
     assert is_dependency_outage(_foreign_error("sqlalchemy.exc", "TimeoutError"))
+
+
+def test_a_refused_login_a_tls_failure_and_a_fatal_reply_are_outages() -> None:
+    def with_state(state: str) -> Exception:
+        error = Exception("names canary")
+        error.sqlstate = state  # type: ignore[attr-defined]
+        return error
+
+    fatal = Exception("terminating")
+    fatal.diag = type("Diag", (), {"severity_nonlocalized": "FATAL"})()  # type: ignore[attr-defined]
+
+    for error in (with_state("28P01"), with_state("28000"), with_state("3D000"), fatal):
+        assert is_dependency_outage(error)
+    assert is_dependency_outage(ssl.SSLError(1, "wrong version number"))
+
+
+def test_a_constraint_violation_a_syntax_error_and_an_application_error_are_not_outages() -> None:
+    def with_state(state: str) -> Exception:
+        error = Exception("statement")
+        error.sqlstate = state  # type: ignore[attr-defined]
+        return error
+
+    for error in (with_state("23505"), with_state("42601"), ValueError("own text")):
+        assert not is_dependency_outage(error)

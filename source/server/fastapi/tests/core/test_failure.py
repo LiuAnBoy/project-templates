@@ -5,6 +5,7 @@ import ssl
 import pytest
 from loguru import logger
 
+from core.dependency import DependencyClosedError
 from core.failure import format_failure
 from core.logging import configure_logging
 
@@ -128,3 +129,100 @@ def test_logging_a_traceback_goes_through_the_description() -> None:
     assert "dependency unreachable" in logged
     assert "ConnectionRefusedError" in logged
     assert not re.search("secret-host", logged)
+
+
+def test_a_withheld_message_keeps_its_sqlstate() -> None:
+    driver = _driver_error("28P01", 'password authentication failed for user "canary-user"')
+
+    text = format_failure(_raise_wrapped(driver, f"x {driver}"))
+
+    assert "[SQLSTATE 28P01]" in text
+    assert "canary-user" not in text
+
+
+def test_a_unique_violation_keeps_its_constraint_name_and_not_its_key() -> None:
+    driver = _driver_error(
+        "23505", "duplicate key\nDETAIL: Key (email)=(canary@example.com) exists"
+    )
+    driver.diag = type("Diag", (), {"constraint_name": "users_email_key"})()  # type: ignore[attr-defined]
+
+    text = format_failure(_raise_wrapped(driver, f"x {driver}"))
+
+    assert "[SQLSTATE 23505, constraint users_email_key]" in text
+    assert "canary" not in text
+
+
+def test_a_constraint_name_that_does_not_look_like_a_name_is_left_out() -> None:
+    driver = _driver_error("23505", "duplicate key")
+    driver.diag = type("Diag", (), {"constraint_name": "a b=(canary)"})()  # type: ignore[attr-defined]
+
+    assert "canary" not in format_failure(_raise_wrapped(driver, f"x {driver}"))
+
+
+@pytest.mark.parametrize(
+    ("text", "note"),
+    [
+        ('server failed: FATAL:  password authentication failed for "canary"', "SQLSTATE 28P01"),
+        ('FATAL:  database "canary" does not exist', "SQLSTATE 3D000"),
+        ('at "canary" failed: Connection refused', "ECONNREFUSED"),
+        ('at "canary" failed: server does not support SSL, but SSL was required', "TLS"),
+        ('at "canary" failed: timeout expired', "ETIMEDOUT"),
+    ],
+)
+def test_an_error_with_no_code_gets_its_note_from_the_fixed_words(text: str, note: str) -> None:
+    logged = format_failure(ConnectionError(text))
+
+    assert f"[{note}]" in logged
+    assert "canary" not in logged
+
+
+def test_a_message_with_no_known_words_is_withheld_with_no_note() -> None:
+    logged = format_failure(ConnectionError("le serveur canary est parti"))
+
+    assert "<message withheld>" in logged
+    assert "canary" not in logged
+
+
+def test_a_withheld_errno_and_a_tls_reason_are_kept() -> None:
+    refused = ConnectionRefusedError(61, "connect canary-host")
+    tls = ssl.SSLCertVerificationError(1, "certificate verify failed: canary-host")
+    tls.reason = "CERTIFICATE_VERIFY_FAILED"
+
+    assert "[ECONNREFUSED]" in format_failure(refused)
+    assert "[TLS CERTIFICATE_VERIFY_FAILED]" in format_failure(tls)
+    assert "canary" not in format_failure(refused) + format_failure(tls)
+
+
+def test_text_we_fixed_stays_whatever_its_class() -> None:
+    logged = format_failure(DependencyClosedError("postgres: the database is closed"))
+
+    assert "postgres: the database is closed" in logged
+
+
+def test_an_error_whose_attributes_misbehave_is_still_described() -> None:
+    class Hostile(ConnectionError):
+        @property
+        def sqlstate(self) -> str:
+            raise RuntimeError("no")
+
+    assert "<message withheld>" in format_failure(Hostile("names canary"))
+
+
+def test_a_failed_connect_to_a_name_with_several_addresses_keeps_them_out_of_the_log() -> None:
+    """Asyncio raises a plain ``OSError``, with no errno, naming every address it tried."""
+    tried = OSError(
+        "Multiple exceptions: [Errno 61] Connect call failed ('::1', 5, 0, 0), "
+        "[Errno 61] Connect call failed ('10.9.8.7', 5)"
+    )
+
+    logged = format_failure(_raise_wrapped(tried, "connecting failed"))
+
+    assert "10.9.8.7" not in logged
+    assert "[ECONNREFUSED]" in logged
+
+
+def test_the_path_of_a_failed_file_operation_stays_out_of_the_log() -> None:
+    logged = format_failure(FileNotFoundError(2, "No such file", "/canary/path"))
+
+    assert "/canary/path" not in logged
+    assert "[ENOENT]" in logged

@@ -20,8 +20,10 @@ class TransactionRunner(Protocol):
 
     The service owns the scope: it calls ``run``, passes the session to every
     repository call inside the callback, and the transaction commits when the
-    callback returns and rolls back when it raises. A ``run`` called from inside
-    the callback is refused at once, on every store; pass the session down instead.
+    callback returns and rolls back when it raises. A ``run`` called while the
+    transaction is open from code running inside it, a task the callback started
+    included, is refused at once, on every store; pass the session down instead. Once
+    the transaction has ended, such code opens one of its own.
     """
 
     async def run[T](self, work: Callable[[AsyncSession], Awaitable[T]]) -> T:
@@ -35,7 +37,7 @@ class TransactionRunner(Protocol):
 
         Raises:
             Exception: Whatever ``work`` raised, after the rollback.
-            RuntimeError: When called from inside another ``run``.
+            RuntimeError: When called from inside another open ``run``.
         """
         ...
 

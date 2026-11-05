@@ -9,6 +9,7 @@ from types import SimpleNamespace
 import pytest
 from fastapi.testclient import TestClient
 from loguru import logger
+from pydantic import ValidationError
 
 import main
 from core import rate_limit
@@ -84,6 +85,49 @@ def test_a_command_on_a_closed_port_fails_at_once_with_an_outage_that_logs_nothi
     assert "ConnectionError" in logged
     for secret in SECRETS:
         assert secret not in logged
+
+
+def test_a_closed_port_on_a_name_with_several_addresses_logs_none_of_them() -> None:
+    name = "local" + "host"
+
+    error, _ = _failure_of(f"redis://:{PASSWORD}@{name}:1")
+
+    logged = format_failure(error)
+    assert is_dependency_outage(error)
+    for secret in (name, HOST, "::1", PASSWORD):
+        assert secret not in logged
+
+
+async def _wrong_password(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+    while await reader.read(1024):
+        writer.write(b"-WRONGPASS invalid username-password pair\r\n")
+        await writer.drain()
+
+
+def test_a_wrong_password_is_an_outage_through_the_real_client() -> None:
+    with _serving(_wrong_password) as url:
+        error, _ = _failure_of(url)
+
+    assert is_dependency_outage(error)
+    assert PASSWORD not in format_failure(error)
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "redis://:canary-pw@canary-host:canary-port",
+        "redis://[canary-host]:6379",
+        "redis://canary-host:99999",
+        "redis://canary-host:6379/0?socket_timeout=canary",
+        "canary",
+    ],
+)
+def test_a_malformed_url_is_refused_by_the_settings_naming_it_and_no_value(value: str) -> None:
+    with pytest.raises(ValidationError) as raised:
+        Settings(_env_file=None, REDIS_URL=value)  # type: ignore[call-arg]
+
+    assert "REDIS_URL" in str(raised.value)
+    assert "canary" not in str(raised.value)
 
 
 def test_a_connection_the_server_drops_is_an_outage() -> None:

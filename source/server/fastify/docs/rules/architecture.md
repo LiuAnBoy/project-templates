@@ -11,11 +11,12 @@ src/
   config.ts          # zod env schema, spreading infra/infra-env.ts
   infra/             # the seam: createInfra(config), types.ts, infra-env.ts; what the process depends on
   common/
-    errors/          # failures.ts (the table and AppError), failure.ts, dependency-failure.ts
+    errors/          # failures.ts (the table and AppError), failure.ts, dependency-failure.ts, fixed-text-error.ts, startup-failure.ts
     http/            # envelope.ts, error-handler.ts, access-log.ts, request-id.ts, json-body-parser.ts, ...
     logging/         # logger-options.ts
     concurrency/     # bounded.ts
     dependency-checks.ts  # DependencyCheck, the health probe and the startup gate
+    process-guard.ts # a failure nothing caught, and the deadline of a shutdown
     assert-never.ts
     module.ts        # ServerModule type
     registry.ts      # createRegistry<T>()

@@ -144,16 +144,19 @@ class HealthProbe:
         self._cached: tuple[bool, float] | None = None
 
     async def _run(self) -> bool:
-        """Run the checks once and remember the result.
+        """Run the checks once and remember the result, before the callback can fail.
 
         Returns:
             True when every check passed.
         """
         failed = await failed_checks(self._checks, self._timeout)
-        if failed and self._on_failure is not None:
-            self._on_failure(failed)
         healthy = not failed
         self._cached = (healthy, time.monotonic() + self._cache)
+        if failed and self._on_failure is not None:
+            try:
+                self._on_failure(failed)
+            except Exception:  # a failing log callback must not change what the probe answers
+                pass
         return healthy
 
     async def __call__(self) -> bool:

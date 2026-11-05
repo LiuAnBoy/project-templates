@@ -1,9 +1,15 @@
 import { Redis } from 'ioredis';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { z } from 'zod';
 
 import { isDependencyOutage } from '../../common/errors/dependency-failure.js';
 import { describeFailure } from '../../common/errors/failure.js';
-import { createRedisClient, retryDelay, type RedisPort } from '../client.js';
+import {
+  createRedisClient,
+  redisEnv,
+  retryDelay,
+  type RedisPort,
+} from '../client.js';
 import { fakeRedis, type FakeRedis } from './support.js';
 
 const CLOSED_PORT_URL = 'redis://:secret-pw@127.0.0.1:1';
@@ -173,8 +179,81 @@ describe('redis errors that are not a lost connection', () => {
     await redis.probe().catch(() => undefined);
     await new Promise((resolve) => setTimeout(resolve, 200));
 
-    expect(lines[0]).toBe('redis: client error (ReplyError NOAUTH)');
+    expect(lines[0]).toBe('redis: unreachable (ReplyError NOAUTH), retrying');
     for (const secret of SECRETS)
       expect(lines.join('\n')).not.toContain(secret);
+  });
+});
+
+describe('connections made from the client', () => {
+  it('reproduces a duplicate losing its server: the error reaches the one log line, and ioredis prints nothing raw', async () => {
+    const raw = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const lines: string[] = [];
+    const redis = createRedisClient(
+      { REDIS_URL: CLOSED_PORT_URL },
+      { log: (line) => lines.push(line) },
+    );
+
+    const duplicate = redis.client.duplicate();
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    await redis.close();
+
+    expect(raw).not.toHaveBeenCalled();
+    raw.mockRestore();
+    expect(lines.join('\n')).toContain('ECONNREFUSED');
+    let attempts = 0;
+    duplicate.on('connecting', () => {
+      attempts += 1;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 700));
+    expect(attempts).toBe(0);
+  });
+});
+
+describe('a Redis that refuses the client', () => {
+  it('reproduces a wrong password: an outage through the real client', async () => {
+    const fake = await fakeRedis(
+      () => '-WRONGPASS invalid username-password pair\r\n',
+    );
+    const redis = createRedisClient(
+      { REDIS_URL: fake.url },
+      { log: () => undefined },
+    );
+
+    const error = await redis.probe().catch((caught: unknown) => caught);
+    await redis.close();
+    await fake.stop();
+
+    expect(error).toBeInstanceOf(Error);
+    expect(isDependencyOutage(error)).toBe(true);
+  });
+});
+
+describe('the settings of redis', () => {
+  const settings = z.object(redisEnv);
+
+  it('reproduces a malformed URL: refused naming the setting and no value', () => {
+    for (const value of [
+      'redis://:canary-pw@canary-host:canary-port',
+      'redis://[canary-host]:6379',
+      'redis://canary-host:99999',
+      'canary',
+    ]) {
+      const result = settings.safeParse({ REDIS_URL: value });
+
+      expect(result.success).toBe(false);
+      expect(result.error?.issues[0]?.path).toEqual(['REDIS_URL']);
+      expect(JSON.stringify(result.error?.issues)).not.toContain('canary');
+    }
+  });
+
+  it('accepts the shapes a deployment uses', () => {
+    for (const value of [
+      'redis://localhost:6379',
+      'redis://:p%40ss@host:6380/2',
+      'rediss://user:pass@host',
+    ]) {
+      expect(settings.safeParse({ REDIS_URL: value }).success).toBe(true);
+    }
   });
 });

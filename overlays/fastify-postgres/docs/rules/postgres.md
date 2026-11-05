@@ -4,10 +4,10 @@ PostgreSQL is accessed through Drizzle. The Drizzle schema, written in TypeScrip
 
 ## Connection settings
 
-- The server reads `DATABASE_URL`, a plain `postgresql://` URL, and nothing in code names a host or a credential. A missing value stops the boot, naming the variable.
+- The server reads `DATABASE_URL`, a plain `postgresql://` URL, and nothing in code names a host or a credential. A missing value, or a URL the driver cannot read (a port that is not a number, an unparsable host), stops the boot naming the variable and never the value.
 - `POSTGRES_DATABASE` is the plain database name. Compose uses it to create the database, and on a shared cluster it must name a database that exists there, because a wrong value blocks registering the service.
 - `POSTGRES_USER`, `POSTGRES_PASSWORD` and `POSTGRES_PORT` serve compose; the server reads only the URL. A project moves to another server by changing `.env` alone.
-- `src/db/database.ts` is the one file that names PostgreSQL. It exports `createDatabase(config)`, which returns the Drizzle client, the transaction runner, a probe and a close, and the `src/infra/` seam calls it once. Never open a second pool.
+- `src/db/database.ts` is the one file that names PostgreSQL. It exports `createDatabase(config)`, which returns the Drizzle client, the transaction runner, a probe and a close, and the `src/infra/` seam calls it once. Never open a second pool: a connection of the pool has its `error` listener, and one a project creates by hand ends the process when it is lost, unless it listens itself.
 - `TEST_DATABASE_URL` is read only by `pnpm test:integration`, which refuses a host that is not local and works in a throwaway schema of its own.
 
 ## Schema and migrations
@@ -42,7 +42,9 @@ Drizzle's migrator applies a migration only when its journal `when` is newer tha
 - SQL appears only in repositories. Controllers, routes and services never build a query. A query has one place to review and to change when the schema moves.
 - Drizzle builds the queries. Raw SQL through Drizzle's `sql` tag is fine in a repository when the builder cannot express the query.
 - The service owns the transaction scope. It opens the transaction with the runner from `createDatabase`, `transactions.run(tx => ...)` (the `TRANSACTION_RUNNER` token on Nest, `infra.transactions` on Fastify), passes the transaction handle explicitly to every repository call inside it, and commits or rolls back. Do not use AsyncLocalStorage or request-scoped repositories: a mistake there does not throw, it silently loses atomicity.
-- A `run` called from inside another `run` is refused at once, with an error that names the cause, and answers 500 because it is a bug. It would otherwise take a second connection and wait for a lock its own caller holds, or use up the pool when several requests nest together. Pass the handle down instead. The outer transaction rolls back when the refusal propagates and commits when its callback catches it, and the next `run` works as usual.
+- A `run` called from inside another open `run` is refused at once, with an error that names the cause, and answers 500 because it is a bug. It would otherwise take a second connection and wait for a lock its own caller holds, or use up the pool when several requests nest together. Pass the handle down instead. The outer transaction rolls back when the refusal propagates and commits when its callback catches it, and the next `run` works as usual.
+- A timer or a promise that the callback starts inherits this refusal for as long as the transaction is open, and it ends with the transaction: code that runs on after the commit may open a transaction of its own. Start work that needs the data only after `run` returns.
+- A connection lost inside a `run` fails its statement with an error the classifier answers as 503, and the pool drops the connection.
 - A repository method that writes takes the caller's handle as a required parameter. A write that silently falls back to the pool client commits outside the transaction its caller believes it is in.
 - A read may default to the pool when no transaction is open.
 - Counting or deleting under a lock is the one case where a repository may open its own transaction, when the transaction is the whole operation. Say so in its doc comment, and never call it from inside a `run`.
@@ -62,6 +64,10 @@ async transfer(input: TransferInput): Promise<void> {
   await this.events.stockMoved(input); // after commit
 }
 ```
+
+### On a server that went silent
+
+`bounded()` answers at its deadline, and a promise cannot be cancelled, so a statement it abandoned keeps its connection for as long as `data.md` says. The probe of the health route sets `query_timeout` on its own query on the pool, so its connection is dropped at the deadline and probes cannot use up the pool. Drizzle gives a statement of yours no such option, and a `statement_timeout` is enforced by the server, so it does nothing for a server that does not answer.
 
 ## Rows and types
 

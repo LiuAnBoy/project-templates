@@ -8,11 +8,13 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Protocol
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from redis.asyncio import BlockingConnectionPool, Redis
 from redis.asyncio.retry import Retry
 from redis.backoff import NoBackoff
+
+from core.dependency import DependencyClosedError
 
 #: The first segment of every key this template writes itself (the rate limiter's
 #: counters). Several services may share one Redis, so change it to the name of the
@@ -41,6 +43,33 @@ class RedisSettings(BaseSettings):
 
     # The alias names the variable in an error: `REDIS_URL`, not `redis_url`.
     redis_url: str = Field(alias="REDIS_URL", pattern=r"^rediss?://")
+
+    # The name is its own: `Settings` inherits every store's settings, and a validator with
+    # the name of another store's would replace it without a word.
+    @field_validator("redis_url")
+    @classmethod
+    def _check_redis_url(cls, value: str) -> str:
+        """Refuse a URL the client cannot read.
+
+        A port that is not a number, an unparsable host and a query option of the wrong
+        type fail when the pool is built, with a message that quotes the part that was
+        wrong. Building the pool here, which never connects, stops the boot at the
+        settings, where an error names the variable and never its value.
+
+        Args:
+            value: The raw setting.
+
+        Returns:
+            The setting, unchanged.
+
+        Raises:
+            ValueError: With a fixed message, whatever the pool raised.
+        """
+        try:
+            BlockingConnectionPool.from_url(value)
+        except Exception:
+            raise ValueError("must be a valid redis:// or rediss:// URL") from None
+        return value
 
 
 class RedisConfig(Protocol):
@@ -124,7 +153,7 @@ def create_redis_client(
 
     async def probe() -> None:
         if closed:
-            raise ConnectionError("redis: the client is closed")
+            raise DependencyClosedError("redis: the client is closed")
         if not await client.ping():
             raise ConnectionError("redis: unexpected reply to PING")
 

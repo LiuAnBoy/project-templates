@@ -11,14 +11,16 @@
  *
  * The service owns the scope: it calls `run`, passes the handle to every
  * repository call inside the callback, and the transaction commits when the
- * callback returns and rolls back when it throws. A `run` called from inside the
- * callback is refused at once, on every store; pass the handle down instead.
+ * callback returns and rolls back when it throws. A `run` called while the
+ * transaction is open from code running inside it, a promise or a timer the callback
+ * started included, is refused at once, on every store; pass the handle down instead.
+ * Once the transaction has ended, such code opens one of its own.
  */
 export type TransactionRunner<Tx> = {
   /**
    * @param work - The unit of work; it receives the transaction handle.
    * @returns What `work` returned, once the transaction has committed.
-   * @throws Whatever `work` threw, after the rollback; an `Error` when called from inside another `run`.
+   * @throws Whatever `work` threw, after the rollback; an `Error` when called from inside another open `run`.
    */
   run<T>(work: (tx: Tx) => Promise<T>): Promise<T>;
 };

@@ -6,7 +6,6 @@ another SQL store replaces this file and the models' dialect-specific types.
 """
 
 from collections.abc import Awaitable, Callable
-from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -22,10 +21,12 @@ from sqlalchemy.ext.asyncio import (
 )
 from sqlalchemy.pool import NullPool
 
+from core.dependency import DependencyClosedError
+from db.nesting_guard import NestingGuard
 from db.types import DatabasePort, TransactionRunner
 
-#: True while a unit of work of ``transactions.run`` is running in this task.
-_INSIDE_RUN: ContextVar[bool] = ContextVar("postgres_inside_run", default=False)
+#: Refuses a ``transactions.run`` from inside an open one.
+_GUARD = NestingGuard("postgres")
 
 
 class DatabaseSettings(BaseSettings):
@@ -50,9 +51,11 @@ class DatabaseSettings(BaseSettings):
     # The alias names the variable in an error: `DATABASE_URL`, not `database_url`.
     database_url: str = Field(alias="DATABASE_URL", pattern=r"^postgres(ql)?://")
 
+    # The name is its own: `Settings` inherits every store's settings, and a validator with
+    # the name of another store's would replace it without a word.
     @field_validator("database_url")
     @classmethod
-    def _check_url(cls, value: str) -> str:
+    def _check_database_url(cls, value: str) -> str:
         """Refuse a URL that SQLAlchemy cannot turn into an engine.
 
         A port that is not a number, an unparsable authority and a repeated ``port``
@@ -129,9 +132,9 @@ class _Runner:
     async def run[T](self, work: Callable[[AsyncSession], Awaitable[T]]) -> T:
         """Run the work in a transaction.
 
-        A nested call is refused at once, because it would take a second connection
-        and wait for locks its own caller holds, or exhaust the pool when several
-        requests nest together.
+        A nested call is refused at once (:class:`~db.nesting_guard.NestingGuard`),
+        because it would take a second connection and wait for locks its own caller
+        holds, or exhaust the pool when several requests nest together.
 
         Args:
             work: The unit of work; it receives the session of the transaction.
@@ -140,22 +143,13 @@ class _Runner:
             What ``work`` returned, once the transaction has committed.
 
         Raises:
-            RuntimeError: When called from inside another ``run``.
+            RuntimeError: When called from inside another open ``run``.
             ConnectionError: When the database was closed.
         """
         if self._is_closed():
-            raise ConnectionError("postgres: the database is closed")
-        if _INSIDE_RUN.get():
-            raise RuntimeError(
-                "postgres: transactions.run was called inside a transaction; "
-                "pass the session down instead"
-            )
-        token = _INSIDE_RUN.set(True)
-        try:
-            async with self._sessions() as session, session.begin():
-                return await work(session)
-        finally:
-            _INSIDE_RUN.reset(token)
+            raise DependencyClosedError("postgres: the database is closed")
+        async with _GUARD.entered(), self._sessions() as session, session.begin():
+            return await work(session)
 
 
 def create_database(config: DatabaseConfig, options: DatabaseOptions | None = None) -> DatabasePort:
@@ -167,7 +161,9 @@ def create_database(config: DatabaseConfig, options: DatabaseOptions | None = No
     hides bound parameters, so no statement error carries a value, and checks a
     pooled connection before it hands it out, so a restart of the server costs no
     request. After ``close`` the probe and the runner fail with a ``ConnectionError``,
-    which the classifier answers as an outage.
+    which the classifier answers as an outage. On a server that went silent, psycopg
+    tries to cancel a query whose waiter was cancelled, gives up after a few seconds
+    and closes the connection, so a probe that ``bounded()`` abandoned frees its slot.
 
     Args:
         config: The validated settings.
@@ -192,7 +188,7 @@ def create_database(config: DatabaseConfig, options: DatabaseOptions | None = No
 
     async def probe() -> None:
         if closed:
-            raise ConnectionError("postgres: the database is closed")
+            raise DependencyClosedError("postgres: the database is closed")
         async with engine.connect() as connection:
             await connection.execute(text("select 1"))
 

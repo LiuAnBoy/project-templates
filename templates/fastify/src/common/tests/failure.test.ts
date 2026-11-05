@@ -61,7 +61,7 @@ describe('dependency outage classification', () => {
         isDependencyOutage(new Error('query', { cause: new Error(message) })),
       ).toBe(true);
     }
-    expect(isDependencyOutage(new Error('Query read timeout'))).toBe(false);
+    expect(isDependencyOutage(new Error('Some other timeout'))).toBe(false);
   });
 
   it('does not treat a SQLite constraint error or another Redis error as an outage', () => {
@@ -141,6 +141,19 @@ describe('describeFailure', () => {
       expect(link?.stack).toContain('failure.test');
       expect(JSON.stringify(link)).not.toMatch(/canary|10\.9\.8\.7|5432/);
     }
+  });
+
+  it('withholds the message of any system error, which names its path, without calling it an outage', () => {
+    const error = Object.assign(
+      new Error("ENOENT: no such file or directory, open '/canary/path'"),
+      { code: 'ENOENT', syscall: 'open', path: '/canary/path' },
+    );
+
+    const link = describeFailure(error).chain[0];
+
+    expect(link?.code).toBe('ENOENT');
+    expect(JSON.stringify(link)).not.toContain('canary');
+    expect(isDependencyOutage(error)).toBe(false);
   });
 
   it('keeps the fixed message of a client that lost its connection', () => {
@@ -242,5 +255,102 @@ describe('describeFailure', () => {
     const error = Object.assign(new Error('plain message'), { query: 'x' });
 
     expect(describeFailure(error).chain[0]?.message).toBe('plain message');
+  });
+});
+
+describe('the classifier against the failure log', () => {
+  it('answers a refused login, an unknown database and a TLS failure as an outage, and keeps them withheld', () => {
+    for (const code of [
+      '28P01',
+      '28000',
+      '3D000',
+      'ERR_TLS_CERT_ALTNAME_INVALID',
+      'DEPTH_ZERO_SELF_SIGNED_CERT',
+      'ERR_SSL_WRONG_VERSION_NUMBER',
+      'EPROTO',
+    ]) {
+      const error = Object.assign(new Error('names canary-host'), { code });
+
+      expect(isDependencyOutage(new Error('query', { cause: error }))).toBe(
+        true,
+      );
+      expect(describeFailure(error).chain[0]?.message).toBe('');
+    }
+  });
+
+  it('answers a reply that ended the connection as an outage', () => {
+    const error = Object.assign(new Error('terminating connection'), {
+      code: '25P03',
+      severity: 'FATAL',
+    });
+
+    expect(isDependencyOutage(error)).toBe(true);
+  });
+
+  it('answers the fixed errors of a client that cannot log in or is closed as an outage', () => {
+    for (const message of [
+      'The server does not support SSL connections',
+      'There was an error establishing an SSL connection',
+      'SASL: SCRAM-SERVER-FIRST-MESSAGE: client password must be a string',
+      'Cannot use a pool after calling end on the pool',
+      'Query read timeout',
+    ]) {
+      expect(isDependencyOutage(new Error(message))).toBe(true);
+    }
+    for (const message of [
+      'WRONGPASS invalid username-password pair',
+      'NOAUTH Authentication required.',
+      'LOADING Redis is loading the dataset in memory',
+    ]) {
+      const reply = new Error(message);
+      reply.name = 'ReplyError';
+      expect(isDependencyOutage(reply)).toBe(true);
+    }
+  });
+
+  it('keeps a constraint violation, a syntax error, another reply and an application error as 500s, with their messages', () => {
+    const cases: Error[] = [
+      Object.assign(new Error('duplicate key'), { code: '23505' }),
+      Object.assign(new Error('syntax error'), { code: '42601' }),
+      Object.assign(new Error('WRONGTYPE Operation'), { name: 'ReplyError' }),
+      new Error('the order is already paid'),
+    ];
+    for (const error of cases) {
+      expect(isDependencyOutage(error)).toBe(false);
+      expect(describeFailure(error).chain[0]?.message).toBe(error.message);
+    }
+  });
+
+  it('logs the text of a bounded timeout, which is fixed and names the dependency', async () => {
+    const error = await bounded(
+      new Promise<never>(() => undefined),
+      5,
+      'postgres',
+    ).catch((caught: unknown) => caught);
+
+    const link = describeFailure(error).chain[0];
+
+    expect(isDependencyOutage(error)).toBe(true);
+    expect(link?.message).toBe('postgres: no answer in 5ms');
+    expect(link?.code).toBe('ETIMEDOUT');
+  });
+
+  it('handles the late rejection of work a bound abandoned', async () => {
+    const unhandled: unknown[] = [];
+    const listener = (reason: unknown): void => {
+      unhandled.push(reason);
+    };
+    process.on('unhandledRejection', listener);
+    let fail: (reason: Error) => void = () => undefined;
+    const work = new Promise<never>((_resolve, reject) => {
+      fail = reject;
+    });
+
+    await bounded(work, 5, 'postgres').catch(() => undefined);
+    fail(new Error('late'));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    process.off('unhandledRejection', listener);
+
+    expect(unhandled).toEqual([]);
   });
 });

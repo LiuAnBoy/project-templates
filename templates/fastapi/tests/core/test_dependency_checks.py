@@ -1,5 +1,6 @@
 import asyncio
 import functools
+import time
 from collections.abc import Awaitable, Callable
 
 import pytest
@@ -130,3 +131,33 @@ async def test_startup_names_a_check_that_hangs_within_its_bound() -> None:
         await run_startup_checks([_Counting("hang").check()], seconds=0.05)
 
     assert str(raised.value) == "dependency check failed: fake"
+
+
+@_sync
+async def test_a_failing_callback_changes_neither_the_answer_nor_the_cache() -> None:
+    fake = _Counting("fail")
+
+    def boom(_names: object) -> None:
+        raise RuntimeError("log failed")
+
+    probe = HealthProbe([fake.check()], cache_seconds=60, on_failure=boom)
+
+    assert await probe() is False
+    assert await probe() is False
+    assert fake.runs == 1
+
+
+@_sync
+async def test_a_check_that_blocks_while_it_is_cancelled_still_answers_within_the_bound() -> None:
+    async def stubborn() -> None:
+        try:
+            await asyncio.sleep(30)
+        except asyncio.CancelledError:
+            await asyncio.sleep(0.5)
+            raise
+
+    probe = HealthProbe([DependencyCheck("fake", stubborn)], timeout_seconds=0.05)
+
+    started = time.monotonic()
+    assert await probe() is False
+    assert time.monotonic() - started < 0.3

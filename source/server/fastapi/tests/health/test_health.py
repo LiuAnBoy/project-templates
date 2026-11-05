@@ -1,4 +1,5 @@
 import time
+import traceback
 
 import pytest
 from fastapi.testclient import TestClient
@@ -119,3 +120,19 @@ def test_health_stays_exempt_from_the_rate_limit_while_a_check_fails(
     assert limited.status_code == 429
     assert first.status_code == 503
     assert second.status_code == 503
+
+
+def test_a_factory_that_quotes_a_setting_keeps_it_out_of_the_traceback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def failing(_config: object) -> None:
+        raise ValueError("Port could not be cast: canary-value")
+
+    monkeypatch.setattr(main, "create_infra", failing)
+
+    with pytest.raises(RuntimeError) as raised:
+        main.create_app()
+
+    printed = "".join(traceback.format_exception(raised.value))
+    assert "failed to build the infrastructure: ValueError" in printed
+    assert "canary-value" not in printed

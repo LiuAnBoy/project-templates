@@ -12,7 +12,6 @@ that serialises the writers of this process, and begins each transaction with
 
 import logging
 from collections.abc import Awaitable, Callable
-from contextvars import ContextVar
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
@@ -30,6 +29,8 @@ from sqlalchemy.ext.asyncio import (
 )
 from sqlalchemy.pool import AsyncAdaptedQueuePool, NullPool
 
+from core.dependency import DependencyClosedError
+from db.nesting_guard import NestingGuard
 from db.types import DatabasePort, MigrationError, TransactionRunner
 
 # aiosqlite logs every statement together with its bound values at DEBUG, and the
@@ -37,8 +38,8 @@ from db.types import DatabasePort, MigrationError, TransactionRunner
 # so that no log line holds a bound value, whatever LOG_LEVEL says.
 logging.getLogger("aiosqlite").setLevel(logging.WARNING)
 
-#: True while a unit of work of ``transactions.run`` is running in this task.
-_INSIDE_RUN: ContextVar[bool] = ContextVar("sqlite_inside_run", default=False)
+#: Refuses a ``transactions.run`` from inside an open one.
+_GUARD = NestingGuard("sqlite")
 
 
 class DatabaseSettings(BaseSettings):
@@ -172,8 +173,9 @@ class _Runner:
         """Run the work in a transaction.
 
         Writers wait for each other for ``write_wait_seconds`` and then fail as a
-        busy store. A nested call is refused at once, because it would wait for a
-        connection its own caller holds and stop every write until a restart.
+        busy store. A nested call is refused at once
+        (:class:`~db.nesting_guard.NestingGuard`), because it would wait for a connection
+        its own caller holds and stop every write until a restart.
 
         Args:
             work: The unit of work; it receives the session of the transaction.
@@ -182,25 +184,16 @@ class _Runner:
             What ``work`` returned, once the transaction has committed.
 
         Raises:
-            RuntimeError: When called from inside another ``run``.
+            RuntimeError: When called from inside another open ``run``.
             ConnectionError: When the database was closed.
         """
         if self._is_closed():
-            raise ConnectionError("sqlite: the database is closed")
-        if _INSIDE_RUN.get():
-            raise RuntimeError(
-                "sqlite: transactions.run was called inside a transaction; "
-                "pass the session down instead"
-            )
-        token = _INSIDE_RUN.set(True)
-        try:
-            async with self._sessions() as session, session.begin():
-                # A session takes its connection at the first statement; take it now, so the
-                # wait for the writer happens before the work starts, not somewhere inside it.
-                await session.connection()
-                return await work(session)
-        finally:
-            _INSIDE_RUN.reset(token)
+            raise DependencyClosedError("sqlite: the database is closed")
+        async with _GUARD.entered(), self._sessions() as session, session.begin():
+            # A session takes its connection at the first statement; take it now, so the
+            # wait for the writer happens before the work starts, not somewhere inside it.
+            await session.connection()
+            return await work(session)
 
 
 def create_database(config: DatabaseConfig, options: DatabaseOptions | None = None) -> DatabasePort:
@@ -238,7 +231,7 @@ def create_database(config: DatabaseConfig, options: DatabaseOptions | None = No
 
     async def probe() -> None:
         if closed:
-            raise ConnectionError("sqlite: the database is closed")
+            raise DependencyClosedError("sqlite: the database is closed")
         async with reader.connect() as connection:
             await connection.execute(text("select 1"))
 
