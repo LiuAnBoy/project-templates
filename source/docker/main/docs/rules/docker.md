@@ -51,3 +51,10 @@ These rules hold when the project has a `Dockerfile`, a `docker-compose.yml` and
 - Published ports bind to `127.0.0.1`. Opening one beyond loopback requires a reverse proxy in front of it.
 - Behind a proxy, name the proxy in `TRUST_PROXY`. Leave it empty when nothing is in front: the limit then counts the socket address.
 - A standalone web container names its API in `DOCKER_API_HOST` in `.env`, which is both the image build argument (Next.js) and the running container's `API_HOST`. The default, `http://host.docker.internal:8000`, reaches a server published on the host's loopback where Docker Desktop forwards that name to the host. On Linux `extra_hosts` maps the name to `host-gateway`, which is the bridge address, and a server published on `127.0.0.1` does not listen there, so the default misses a server from this repository's compose. Put the web and the server on one external network and name the server's service in `DOCKER_API_HOST` (`http://<service>:8000`). The host's real address reaches only a server that listens on it, which a loopback-published server does not. This follows from how Docker publishes ports and was not run on Linux.
+
+## A part of a composed monorepo
+
+- The compose file, the `.dockerignore` and the Docker settings live at the root, and each part keeps only its `Dockerfile`. The build context is the root, except for a FastAPI server, whose context is `server/`.
+- `server` publishes no port, so `PORT` does not reach it there: `web` and `dashboard` reach it on the `edge` network, and `WEB_PORT` and `DASHBOARD_PORT` are the published ports.
+- The nginx template of a Vite part resolves `API_HOST` through Docker's DNS at run time, not once at start, so a restarted server is found again.
+- `TRUST_PROXY` equals `EDGE_SUBNET`, so the server believes only the visitor address a web part forwards.

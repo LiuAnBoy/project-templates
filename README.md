@@ -40,7 +40,7 @@ Overlay 在**建立專案時**套用一次，不是安裝到已在開發的專�
 
 - `shared/providers/UiProvider.tsx`：掛上該元件庫的 provider（取代基底的版本）。
 - `shared/hooks/useNotification.ts`：同樣四個方法，改用該元件庫的通知（antd 用 `App.useApp`、MUI 用 notistack、HeroUI 用 `toast`），呼叫端不用改，附測試。
-- `shared/styles/theme.ts`：整站唯一的樣式來源（顏色、字型、圓角、間距），元件庫的 theme 從這裡取值。
+- `shared/styles/theme.ts`：整站唯一的樣式來源（顏色、字型、圓角；要共用的間距也放這裡），元件庫的 theme 從這裡取值。
 - 以該元件庫自己的元件渲染的首頁 `Welcome`，以及一個 Playwright 測試，斷言只有該元件庫的樣式表才會產生的計算樣式。
 - Next.js 所需的設定（例如樣式註冊的 layout）與 HeroUI 的 PostCSS 設定。
 - 文件：`docs/rules/ui.md`（該元件庫的使用規則）、`docs/styles.md`、`docs/components/README.md`、`docs/components/useNotification.md`，以及 overlay 版的 `AGENTS.md`。
@@ -151,7 +151,7 @@ pnpm dev                                                 # FastAPI：make dev
 
 MySQL 預設映像是 `mysql:9`，`mysql:8.4` 也跑過同一套真實服務檢查。要接已經有資料表的 MySQL，用 `pnpm db:pull` 從資料庫產生 schema：舊表維持原樣，不硬套 UUID 與 snake_case，新表才照規則；步驟與注意事項（DDL 會自動 commit、MyISAM 沒有交易、大表 `ALTER` 會鎖表、退路是 `mysqldump`）寫在 overlay 的 `docs/rules/mysql.md`。
 
-FastAPI 與 MySQL 的資料庫程式碼有整合測試，但沒有正式環境的使用紀錄。
+FastAPI 的資料庫程式碼和 MySQL（Nest、Fastify）的資料庫程式碼都有整合測試，但都沒有正式環境的使用紀錄。
 
 ## Docker
 

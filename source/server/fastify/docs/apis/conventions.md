@@ -148,7 +148,7 @@ wire 上的 query key、body 欄位與 `data` 內每個 key 都是 snake_case。
 | `successEnvelope(schema)`、`pagedEnvelope(itemSchema)`             | 宣告路由的 `response` schema，型別、序列化與驗證來自同一份 schema。                               |
 | `pageQuerySchema`                                                  | 列表路由的 query：`page` 預設 1，`page_size` 預設 20、超過 100 截為 100。`MAX_PAGE_SIZE` 為 100。 |
 | `registerErrorHandling(app)`（`src/common/http/error-handler.ts`） | 在根 instance 設定 error handler 與 not-found handler，是唯一組失敗封套的地方。                   |
-| `AppError(code)`（`src/common/errors/failures.ts`）                | service 丟的失敗，`code` 是 `FAILURES` 的 key。                                                   |
+| `AppError(code)`（`src/common/errors/app-error.ts`）               | service 丟的失敗，`code` 是 `FAILURES` 的 key。                                                   |
 | `bounded(work, ms, what)`（`src/common/concurrency/bounded.ts`）   | 相依服務呼叫的逾時；逾時變成 503。                                                                |
 | `date`（`src/common/date.ts`）                                     | 日期格式化與解析，唯一 import dayjs 的檔案。                                                      |
 

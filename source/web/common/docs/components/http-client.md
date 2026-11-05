@@ -21,7 +21,7 @@
 | `http.delete<T>(path, options?)`                           | 刪除                                         | `payload.data`                          |
 
 - `query` 裡值為 `undefined` 或 `null` 的欄位不會送出。
-- `options` 是 `{ signal?, timeoutMs? }`：`signal` 用來取消請求，`timeoutMs` 覆蓋預設的 15 秒逾時。
+- `options` 是 `{ signal?, timeoutMs?, headers? }`：`signal` 取消請求，`timeoutMs` 覆蓋 15 秒逾時，`headers` 加單次的標頭。
 
 ```ts
 import { http } from '@/shared/http/http';
@@ -37,6 +37,7 @@ const page = await http.list<Product>('/products', { page: 1, q: keyword });
 | `HttpError`                           | 伺服器回了非 2xx，或 2xx 但格式不是 envelope | `status`、`message`、`requestId`、`retryAfter`、`body` |
 | `NetworkError`                        | 完全沒有回應                                 | `cause`                                                |
 | `TimeoutError`（繼承 `NetworkError`） | 逾時沒有回應                                 | `cause`                                                |
+| `AuthTokenError`                      | 取得 token 的 provider 失敗，請求沒有送出    | `cause`                                                |
 
 - 取消請求（`signal` 被中止）時，原樣丟出 axios 的 `CanceledError`，用 axios 的 `isCancel` 判斷，不要當成失敗顯示。
 - `getErrorMessage(error, fallback?)` 回傳該顯示給使用者的文字：`HttpError` 用伺服器的 `message`，連線問題用固定文字，其他用 fallback。

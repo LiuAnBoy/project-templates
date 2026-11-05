@@ -45,7 +45,7 @@ Why: a feature is deleted or moved as one folder, and a reader finds a thing by 
 
 - A route element renders one module component and nothing else. Logic found in a route moves to the module.
 - A component used by two features moves to `shared/components/`. A component used by one stays in its module even if it looks generic.
-- Feature-specific constants and types live in the module. A type shared with the backend comes from the `@app/contract` package where it exists (a monorepo with a Node server), otherwise from generated API types, not a hand copy.
+- Feature-specific constants and types live in the module. A type shared with the backend comes from the `@app/contract` package where it exists (a monorepo with a Node server). Without that package, the project keeps those types in the module by hand and changes them with the API.
 - A shared component takes data and callbacks as props and calls no module hook.
 
 ## Files and naming

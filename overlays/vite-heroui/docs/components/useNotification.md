@@ -35,4 +35,4 @@ function SaveButton() {
 - 在事件處理函式與 mutation 的 callback 裡呼叫，不要在 query hook 裡呼叫。
 - 需要使用者稍後處理的訊息用對話框（HeroUI 的 `Modal`），不是通知，因為通知會自己消失。
 - 位置、同時顯示數量與停留時間在 `src/shared/styles/theme.ts`。
-- 測試在 `src/shared/hooks/tests/useNotification.test.ts`：驗證四個方法、回傳物件穩定，以及四個方法分別呼叫 `toast.success`、`toast.danger`、`toast.warning`、`toast.info`。
+- 測試在 `src/shared/hooks/tests/useNotification.test.tsx`：驗證四個方法、回傳物件穩定，以及四個方法分別呼叫 `toast.success`、`toast.danger`、`toast.warning`、`toast.info`。
