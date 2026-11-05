@@ -3,7 +3,7 @@
 **/.env.*
 !**/.env.example
 **/node_modules
-**/todos
+todos
 .git
 **/.venv
 **/__pycache__

@@ -335,6 +335,32 @@ check_startup_failure() {
   say "$LABEL: a malformed setting stops the container (exit $rc), names the setting and prints no value"
 }
 
+# read_checked <file> <step> <command...>: run a command under the Docker bound with
+# its output in <file>. A failed or timed-out command, or one that prints nothing,
+# fails naming the step, so a guard never judges an empty read.
+read_checked() {
+  local file step
+  file="$1"
+  step="$2"
+  shift 2
+  if ! run_bound "$DOCKER_BOUND" "$@" >"$file" 2>"$file.err"; then
+    cat "$file.err" >&2
+    fail "could not read $step"
+    return 1
+  fi
+  if [ ! -s "$file" ]; then
+    fail "reading $step returned nothing"
+    return 1
+  fi
+}
+
+# absent_from <file> <needle>: succeed when the needle is not in the file. A grep
+# that errors (status 2) is not an absence and fails too.
+absent_from() {
+  grep -a -q -F -- "$2" "$1" 2>/dev/null
+  [ "$?" -eq 1 ]
+}
+
 # scan_export <what> <container-id>: export a container's filesystem and fail when
 # it holds the sentinel, a planted file, `.env` or `todos/`.
 scan_export() {
@@ -347,13 +373,21 @@ scan_export() {
     fail "could not export the filesystem of $what"
     return 1
   fi
-  if grep -a -q -F "$SENTINEL" "$tarball"; then
+  if [ ! -s "$tarball" ]; then
+    fail "the export of the filesystem of $what is empty"
+    return 1
+  fi
+  if ! absent_from "$tarball" "$SENTINEL"; then
     rm -f "$tarball"
-    fail "the sentinel is in the filesystem of $what"
+    fail "the sentinel is in the filesystem of $what, or the export could not be read"
     return 1
   fi
   listing="$WORK/export.list"
-  tar -tf "$tarball" >"$listing" 2>/dev/null
+  if ! tar -tf "$tarball" >"$listing" 2>/dev/null || [ ! -s "$listing" ]; then
+    rm -f "$tarball"
+    fail "could not list the exported filesystem of $what"
+    return 1
+  fi
   rm -f "$tarball"
   if grep -q 'ptcheck-sentinel' "$listing"; then
     fail "a planted context file is in the filesystem of $what"
@@ -386,13 +420,17 @@ check_image() {
     return 1
   fi
   say "$LABEL: $svc runs as user $user (uid $uid), not root"
-  history="$(dk "$DOCKER_BOUND" history --no-trunc --format '{{.CreatedBy}}' "$image" 2>/dev/null)"
-  if printf '%s\n' "$history" | grep -q -F "$SENTINEL"; then
+  history="$WORK/history.out"
+  read_checked "$history" "docker history of the $svc image" \
+    docker history --no-trunc --format '{{.CreatedBy}}' "$image" || return 1
+  if ! absent_from "$history" "$SENTINEL"; then
     fail "the sentinel is in docker history of the $svc image"
     return 1
   fi
-  envs="$(dk "$DOCKER_BOUND" inspect -f '{{json .Config.Env}}' "$image" 2>/dev/null)"
-  if printf '%s\n' "$envs" | grep -q -F "$SENTINEL"; then
+  envs="$WORK/envs.out"
+  read_checked "$envs" "Config.Env of the $svc image" \
+    docker inspect -f '{{json .Config.Env}}' "$image" || return 1
+  if ! absent_from "$envs" "$SENTINEL"; then
     fail "the sentinel is in Config.Env of the $svc image"
     return 1
   fi
@@ -421,7 +459,7 @@ check_build_stage() {
 
 # check_runtime_env: the server sees the sentinel; web and dashboard do not.
 check_runtime_env() {
-  local seen svc
+  local seen svc ids
   seen="$(service_exec server printenv SENTINEL_SECRET 2>/dev/null | tr -d '\r')"
   if [ "$seen" != "$SENTINEL" ]; then
     fail "server does not see SENTINEL_SECRET at runtime, so the sentinel checks prove nothing"
@@ -429,9 +467,13 @@ check_runtime_env() {
   fi
   say "$LABEL: server sees the sentinel at runtime"
   for svc in web dashboard; do
-    if dc "$DOCKER_BOUND" ps -q "$svc" 2>/dev/null | grep -q .; then
-      if service_exec "$svc" printenv SENTINEL_SECRET >/dev/null 2>&1; then
-        fail "$svc sees SENTINEL_SECRET, but it reads no env_file"
+    ids="$(dc "$DOCKER_BOUND" ps -q "$svc" 2>/dev/null)" || { fail "could not list service $svc"; return 1; }
+    if [ -n "$ids" ]; then
+      # Read the whole environment: a failed exec must not look like an absent variable.
+      read_checked "$WORK/printenv.out" "the environment of $svc" \
+        docker compose -p "$PROJECT" --project-directory "$PROJ" exec -T "$svc" printenv || return 1
+      if ! absent_from "$WORK/printenv.out" "$SENTINEL"; then
+        fail "$svc sees the sentinel, but it reads no env_file"
         return 1
       fi
       say "$LABEL: $svc does not see the sentinel"

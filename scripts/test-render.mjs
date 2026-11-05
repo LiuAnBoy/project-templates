@@ -721,7 +721,7 @@ function dockerFixture(extra = {}) {
       'source/sv/compose.app.fragment.yml': APP_SERVICES,
       'source/sv/Dockerfile': DOCKERFILE,
       'source/sv/Dockerfile.build.fragment': 'RUN apt-get install -y libpq5\n',
-      'source/sv/.dockerignore': '**/.env\n**/node_modules\n**/todos\n',
+      'source/sv/.dockerignore': '**/.env\n**/node_modules\ntodos\n',
       'source/pg/dockerignore.fragment': '# local data\ndata\n**/.env\n',
       'source/ui/keep.txt': 'ui\n',
       ...extra,
@@ -888,7 +888,7 @@ test('Dockerfile markers are filled, removed when empty, and never reach the out
 test('.dockerignore takes the fragments appended, without repeating a pattern', () => {
   const fx = dockerFixture();
   assert.equal(render(fx, ['--only', 'dk']).code, 0);
-  assert.equal(read(fx, 'templates/dk/.dockerignore'), '**/.env\n**/node_modules\n**/todos\n# local data\ndata\n');
+  assert.equal(read(fx, 'templates/dk/.dockerignore'), '**/.env\n**/node_modules\ntodos\n# local data\ndata\n');
   assert.equal(joinDockerignore('a\n', ['b\n\n\nc\na\n']), 'a\nb\n\nc\n');
 });
 
@@ -907,7 +907,7 @@ test('an overlay writes a Docker file only when a layer of its own contributes',
   const stored = render(fx2, ['--only', 'store']);
   assert.equal(stored.code, 0, stored.out);
   assert.equal(read(fx2, 'overlays/store/docker-compose.yml'), JOINED);
-  assert.equal(read(fx2, 'overlays/store/.dockerignore'), '**/.env\n**/node_modules\n**/todos\n# local data\ndata\n');
+  assert.equal(read(fx2, 'overlays/store/.dockerignore'), '**/.env\n**/node_modules\ntodos\n# local data\ndata\n');
   // Store blocks alone make no project compose file.
   const fx3 = composeFixture();
   assert.equal(render(fx3, ['--only', 'both']).code, 0);
@@ -958,19 +958,28 @@ test('guard: a Dockerfile is read as Docker does, and compose args must be a blo
 
 test('guard: the only .dockerignore negation allowed is !.env.example', async () => {
   const { checkDockerignore } = await import(new URL('./docker-blocks.mjs', import.meta.url).href);
-  const base = '**/.env\n**/node_modules\n**/todos\n';
+  const base = '**/.env\n**/node_modules\ntodos\n';
   for (const negation of ['!**/.env', '!.env', '!**/.env*', '!**', '!web/.env', '!node_modules']) {
     assert.match(checkDockerignore(`${base}${negation}\n`, 'I')[0], /negation .* is not allowed/, negation);
   }
   assert.deepEqual(checkDockerignore(`${base}!.env.example\n!**/.env.example\n`, 'I'), []);
 });
 
-test('guard: a .dockerignore must hold **/.env, **/node_modules and **/todos', async () => {
+test('guard: a .dockerignore must hold **/.env, **/node_modules and todos', async () => {
   const { checkDockerignore } = await import(new URL('./docker-blocks.mjs', import.meta.url).href);
-  assert.deepEqual(checkDockerignore('**/.env\n**/node_modules\n**/todos\n.git\n', 'I'), []);
-  assert.equal(checkDockerignore('.env\nnode_modules\ntodos\n', 'I').length, 3);
-  assert.match(checkDockerignore('**/node_modules\n**/todos\n', 'I')[0], /lacks \*\*\/\.env/);
-  assert.match(checkDockerignore('**/.env\n**/node_modules\n', 'I')[0], /lacks \*\*\/todos/);
+  assert.deepEqual(checkDockerignore('**/.env\n**/node_modules\ntodos\n.git\n', 'I'), []);
+  assert.equal(checkDockerignore('.env\nnode_modules\n', 'I').length, 3);
+  assert.match(checkDockerignore('**/node_modules\ntodos\n', 'I')[0], /lacks \*\*\/\.env/);
+  assert.match(checkDockerignore('**/.env\n**/node_modules\n', 'I')[0], /lacks todos/);
+});
+
+test('guard: the last USER of a Dockerfile is a numeric uid other than 0', async () => {
+  const { checkFinalUser } = await import(new URL('./docker-blocks.mjs', import.meta.url).href);
+  assert.deepEqual(checkFinalUser('USER root\nFROM x\nUSER 1000:1000\nCMD a\n', 'D'), []);
+  assert.deepEqual(checkFinalUser('USER 1000\n', 'D'), []);
+  for (const bad of ['USER root', 'USER 0', 'USER 0:0', 'USER app', 'USER 1000:1000\nUSER root', '']) {
+    assert.equal(checkFinalUser(`FROM x\n${bad}\n`, 'D').length, 1, bad);
+  }
 });
 
 test('guard: FROM node must match the major of .nvmrc, and exactly one services key', async () => {
@@ -1009,7 +1018,7 @@ test('guard: a server store ships compose.server.fragment.yml, and a Docker laye
 });
 
 test('guard on real output: every Dockerfile, compose file and .dockerignore of templates/ and overlays/ obeys the Docker rules', async () => {
-  const { checkBuildArgs, checkDockerignore, checkNodeMajor, checkOneServices } = await import(
+  const { checkBuildArgs, checkDockerignore, checkFinalUser, checkNodeMajor, checkOneServices } = await import(
     new URL('./docker-blocks.mjs', import.meta.url).href,
   );
   const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -1023,7 +1032,7 @@ test('guard on real output: every Dockerfile, compose file and .dockerignore of 
         const text = () => fs.readFileSync(path.join(dir, file), 'utf8');
         if (file === 'Dockerfile') {
           seen += 1;
-          problems.push(...checkBuildArgs(text(), rel));
+          problems.push(...checkBuildArgs(text(), rel), ...checkFinalUser(text(), rel));
           const nvmrc = path.join(dir, '.nvmrc');
           if (fs.existsSync(nvmrc)) problems.push(...checkNodeMajor(text(), fs.readFileSync(nvmrc, 'utf8'), rel));
         } else if (/^docker-compose(\..+)?\.yml$/.test(file)) {

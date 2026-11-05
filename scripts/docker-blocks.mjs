@@ -57,7 +57,7 @@ export const DOCKERFILE_MARKERS = {
 /** The only build arguments an image may take; every other value is read at runtime. */
 export const ALLOWED_BUILD_ARGS = ['API_HOST', 'PART'];
 /** The patterns every `.dockerignore` must hold. */
-export const REQUIRED_IGNORES = ['**/.env', '**/node_modules', '**/todos'];
+export const REQUIRED_IGNORES = ['**/.env', '**/node_modules', 'todos'];
 
 const SERVER_SERVICES = ['server', 'migrate'];
 const SERVER_KEYS = ['environment', 'depends_on', 'volumes'];
@@ -704,7 +704,7 @@ export function checkBuildArgs(text, label, allowed = ALLOWED_BUILD_ARGS) {
 }
 
 /**
- * Check that a `.dockerignore` lists `.env` files, `node_modules` and `todos`,
+ * Check that a `.dockerignore` lists `.env` files, `node_modules` at any depth, and `todos` at the root only (a deeper `todos` may be a source folder),
  * and holds no `!` line except `!.env.example` and `!**\/.env.example`. A file
  * that needs another negation changes this rule on purpose.
  *
@@ -742,6 +742,28 @@ export function checkNodeMajor(dockerfile, nvmrc, label) {
     }
   }
   return problems;
+}
+
+/**
+ * Check that the last `USER` instruction of a Dockerfile, the one the final
+ * stage runs with, is a numeric uid other than 0.
+ *
+ * @param {string} dockerfile The Dockerfile.
+ * @param {string} label Name of the Dockerfile, for messages.
+ * @returns {string[]} A message when there is no `USER`, or it is not numeric or is 0.
+ */
+export function checkFinalUser(dockerfile, label) {
+  const users = dockerfile
+    .split('\n')
+    .map((line) => /^\s*USER\s+(\S+)/i.exec(line)?.[1])
+    .filter((user) => user !== undefined);
+  const last = users.at(-1);
+  if (last === undefined) return [`${label}: no USER instruction, so the image runs as root`];
+  const match = /^(\d+)(?::\d+)?$/.exec(last);
+  if (!match || Number(match[1]) === 0) {
+    return [`${label}: the last USER is "${last}", expected a numeric uid other than 0`];
+  }
+  return [];
 }
 
 /**

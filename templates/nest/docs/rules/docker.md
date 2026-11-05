@@ -17,8 +17,8 @@ These rules hold when the project has a `Dockerfile`, a `docker-compose.yml` and
 
 ## Secrets
 
-- A secret is never a build argument, an `ENV` line, a copied file or a layer. The only build arguments are `API_HOST` and `PART`, and `test-render.mjs` fails on any other.
-- Runtime values come from `env_file: .env` and `environment`. The context excludes `**/.env`, `**/.env.*` (except the example), `**/node_modules` and `**/todos`.
+- A secret is never a build argument, an `ENV` line, a copied file or a layer. The only build arguments are `API_HOST` and `PART`.
+- Runtime values come from `env_file: .env` and `environment`. The context excludes `**/.env`, `**/.env.*` (except the example), `**/node_modules`, and the local notes directory `todos` at the project root only. A source folder named `todos` anywhere deeper, such as `src/todos/`, stays in the context.
 - A startup failure prints the name of a setting or a check and never a value. A container shows it unchanged: the exit code and the text are those of the process.
 
 ## Healthchecks and restarts
