@@ -152,7 +152,8 @@ docker compose up -d --build --wait
 
 - `COMPOSE_PROJECT_NAME` 是容器、網路與資料卷的名稱。留空時 compose 會失敗並指出這個變數，兩個專案因此不會共用容器或資料卷，`docker compose down -v` 也不會碰到別的專案。
 - 容器裡的伺服器固定聽 8000；`.env` 的 `PORT` 是本機 `127.0.0.1` 上對應的埠。祕密只透過 `env_file` 與 `environment` 在執行時傳入，不會進入映像。
-- Web 範本的服務叫 `web`，不讀 `env_file`，因為對外的容器不該拿到後端的資料庫帳密。它的值只來自 `.env` 的 `DOCKER_API_HOST`（API 的位置，預設 `http://host.docker.internal:8000`，指向本機上的後端）與 `WEB_PORT`（本機 `127.0.0.1` 上的埠，預設 3000）。Next.js 把 `DOCKER_API_HOST` 當建置參數與執行時的 `API_HOST`；Vite 的 nginx 在容器啟動時才讀它，換 API 位置不必重新建置，但 nginx 啟動時必須解析得到這個主機，否則容器起不來。
+- Web 範本的服務叫 `web`，不讀 `env_file`，因為對外的容器不該拿到後端的資料庫帳密。它的值只來自 `.env` 的 `DOCKER_API_HOST`（API 的位置）與 `WEB_PORT`（本機 `127.0.0.1` 上的埠，預設 3000）。Next.js 把 `DOCKER_API_HOST` 當建置參數與執行時的 `API_HOST`；Vite 的 nginx 在容器啟動時才讀它，只轉發 `/api/v1/`，換 API 位置不必重新建置，但 nginx 啟動時必須解析得到這個主機，否則容器起不來。
+- `DOCKER_API_HOST` 預設 `http://host.docker.internal:8000`。Docker Desktop 把這個名稱轉到本機，所以能連到發佈在本機 `127.0.0.1` 的後端。Linux 上 `extra_hosts` 把它對應到 `host-gateway`，那是 bridge 位址，而後端只發佈在 `127.0.0.1`，預設值因此連不到本專案的後端。做法是讓 web 與後端加入同一個外部網路，`DOCKER_API_HOST` 填後端的服務名稱（`http://<服務名稱>:8000`），或填主機的實際位址。這是依 Docker 發佈埠的機制推得，沒有在 Linux 上實測。
 - 不使用 Docker 的專案刪掉這三個檔案即可。`AGENTS.md` 的 Docker 區塊與 `docs/rules/docker.md` 寫成「有這些檔案時」的規則，刪除之後仍然成立。
 - 維護範本時，`bash scripts/check-docker.sh fastify nest fastapi next vite` 會建置映像、在容器裡驗證，並檢查映像沒有祕密、不是以 root 執行；它用 28000、23000 等移動過的埠，不占用其他檢查的埠。沒有 Docker 時結束碼是 3，表示未完成，不是通過。
 

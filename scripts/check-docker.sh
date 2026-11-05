@@ -29,7 +29,8 @@
 #      `server` service (a web base) is checked on its web services instead: each
 #      is healthy and `/` answers 200 through its published port. A Vite project
 #      also answers a deep link such as `/some/route` with `index.html`, and
-#      `/api/v1/hello` from a stub the script runs on the host at 28000, which
+#      `/api/v1/hello` from a stub the script runs on the host at 28000 (and
+#      `/api/health` does not reach it), which
 #      DOCKER_API_HOST names through host.docker.internal.
 #   5. Image guards on every image the project built: the user is not root, the
 #      sentinel is absent from `docker history`, `Config.Env` and the exported
@@ -354,6 +355,8 @@ start_stub() {
         if (req.url === '/api/v1/hello') {
           res.setHeader('content-type', 'application/json');
           res.end(process.env.STUB_BODY);
+        } else if (req.url === '/api/health') {
+          res.end('stub-health');
         } else {
           res.statusCode = 404;
           res.end();
@@ -405,6 +408,11 @@ check_web() {
       return 1
     fi
     say "$LABEL: /api/v1/hello reaches the API stub through the proxy"
+    if [ "$(curl -s --max-time 10 "http://127.0.0.1:$port/api/health")" = "stub-health" ]; then
+      fail "/api/health on the web port reached the API stub, but only /api/v1/ is forwarded"
+      return 1
+    fi
+    say "$LABEL: /api/health on the web port does not reach the API"
   fi
 }
 

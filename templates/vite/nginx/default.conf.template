@@ -14,7 +14,7 @@ server {
     root /usr/share/nginx/html;
 
     # A fixed upstream, resolved when nginx starts.
-    location /api/ {
+    location /api/v1/ {
         proxy_pass ${API_HOST};
         proxy_set_header X-Forwarded-For $forwarded_for;
     }
