@@ -48,6 +48,7 @@ services:
     command: ['node', 'scripts/db/migrate.mjs']
     environment:
       NODE_ENV: production
+      TEST_REDIS_URL: ''
       DATABASE_URL: ./data/app.db
     restart: 'no'
     volumes:

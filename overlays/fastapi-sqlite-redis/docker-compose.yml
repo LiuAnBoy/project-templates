@@ -45,9 +45,10 @@ services:
     build: .
     env_file: .env
     command: ['python', 'scripts/db_migrate.py']
-    restart: 'no'
     environment:
+      TEST_REDIS_URL: ''
       DATABASE_URL: ./data/app.db
+    restart: 'no'
     volumes:
       - sqlite-data:/app/data
   redis:

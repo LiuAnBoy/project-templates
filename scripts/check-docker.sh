@@ -45,8 +45,8 @@
 #      ran a migration the script plants in the copy and exited 0: PostgreSQL
 #      holds its table, and on SQLite the file belongs to uid 1000 in the named
 #      volume, whose top-level declaration `config` lists, and `server` still
-#      answers after a restart. `server` and `migrate` see an empty superuser
-#      password and an empty TEST_* URL. With each store service stopped in turn,
+#      answers after a restart. `server` and `migrate` see every TEST_* URL and
+#      *_ROOT_PASSWORD of .env empty. With each store service stopped in turn,
 #      `run --no-deps server` exits non-zero within STORE_BOUND, names the store
 #      and prints no password, URL or host:port. With the PostgreSQL password
 #      changed behind the volume, `up` exits non-zero, `migrate` prints no user,
@@ -723,14 +723,15 @@ wait_stack() {
   fi
 }
 
-# check_store_env: server and migrate carry no superuser password and no TEST_* URL
-# of their stores from .env, and each of them still holds the variable (empty), so
-# a missing blanking shows as a different line.
+# check_store_env: server and migrate carry no TEST_* URL and no store root password
+# from .env, and each of them still holds the variable (empty), so a missing
+# blanking shows as a different line. A project without `migrate` has server alone.
 check_store_env() {
-  local svc name
-  has_service migrate || return 0
-  grep -q '^POSTGRES_PASSWORD=' "$PROJ/.env" || return 0
+  local svc name names
+  names="$(sed -n -E 's/^(TEST_[A-Z_]*URL|[A-Z_]*_ROOT_PASSWORD)=.*/\1/p' "$PROJ/.env")"
+  [ -n "$names" ] || return 0
   for svc in server migrate; do
+    has_service "$svc" || continue
     if [ "$svc" = server ]; then
       read_checked "$WORK/svcenv.out" "the environment of server" \
         compose_here exec -T server printenv || return 1
@@ -739,17 +740,14 @@ check_store_env() {
         compose_here run --rm --no-deps -T migrate printenv || return 1
     fi
     grep -q '^PATH=' "$WORK/svcenv.out" || { fail "the environment read of $svc holds no PATH"; return 1; }
-    for name in POSTGRES_PASSWORD TEST_DATABASE_URL TEST_REDIS_URL; do
-      grep -q "^$name=" "$PROJ/.env" || continue
-      # migrate reaches no Redis, and a Redis-only project has no migrate service.
-      [ "$svc" = migrate ] && [ "$name" = TEST_REDIS_URL ] && continue
+    for name in $names; do
       if ! grep -q -x "$name=" "$WORK/svcenv.out"; then
         fail "$svc does not carry an empty $name"
         return 1
       fi
     done
   done
-  say "$LABEL: server and migrate carry an empty superuser password and empty TEST_* URLs"
+  say "$LABEL: server and migrate carry empty TEST_* URLs and store root passwords"
 }
 
 # check_migrated: migrate exited 0 and its work is in the store.
@@ -862,9 +860,9 @@ check_migrate_failure() {
   out="$WORK/migrate-fail.out"
   dc "$UP_BOUND" up -d --wait >"$out" 2>&1
   rc=$?
-  dc "$DOCKER_BOUND" logs migrate >>"$out" 2>&1
   if [ "$rc" -eq 0 ] || [ "$rc" -eq 124 ]; then
     cat "$out" >&2
+    dc "$DOCKER_BOUND" logs migrate >&2 2>&1
     fail "up exited $rc although migrate could not log in"
     return 1
   fi

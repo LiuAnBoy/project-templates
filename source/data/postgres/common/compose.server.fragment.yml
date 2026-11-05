@@ -1,11 +1,12 @@
 # How the PostgreSQL service reaches `server` and `migrate`: the URL is fixed by
-# the service name, the superuser password and the test URL stay out of both
-# containers (the app needs neither), and both wait until the service is healthy.
+# the service name, the test URL stays out of both containers, and both wait until
+# the service is healthy. The URL holds the password of the project's own database
+# user, who is its administrator, so `POSTGRES_PASSWORD` is not blanked: that would
+# protect nothing.
 services:
   server:
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-app}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DATABASE:-app}
-      POSTGRES_PASSWORD: ''
       TEST_DATABASE_URL: ''
     depends_on:
       postgres:
@@ -13,7 +14,6 @@ services:
   migrate:
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-app}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DATABASE:-app}
-      POSTGRES_PASSWORD: ''
       TEST_DATABASE_URL: ''
     depends_on:
       postgres:
